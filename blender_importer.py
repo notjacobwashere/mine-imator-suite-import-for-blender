@@ -66,6 +66,7 @@ class ImportOptions:
     asset_pack_path: str = ""
     mineways_path: str = ""
     use_mcprep: bool = True
+    honor_item_keyframe_changes: bool = False
 
 
 @dataclass
@@ -163,17 +164,18 @@ def _apply_transform(obj: bpy.types.Object, state: dict[str, Any], include_bend:
 def _engine_rotation_matrix(state: dict[str, Any]) -> Matrix:
     """Reproduce GameMaker's Z-X-Y Mine-imator rotation composition.
 
-    Mine-imator scene values already use its engine X/Y/Z axes.  Converting
-    the handedness to Blender yields Ry(-Y) @ Rx(X) @ Rz(Z); treating these as
-    an XYZ Euler (or swapping Y/Z as model-file values) breaks mixed-axis poses.
+    Matrix::Rotation composes the engine rotation as Y @ X @ Z after accounting
+    for Mine-imator's column-major storage.  matrix_build then transposes it.
+    Reflecting engine Y into Blender Y produces Z @ X @ -Y.  Treating these
+    values as an ordinary XYZ Euler breaks mixed-axis limb poses.
     """
     rx = math.radians(float(state.get("ROT_X", 0.0)))
     ry = math.radians(float(state.get("ROT_Y", 0.0)))
     rz = math.radians(float(state.get("ROT_Z", 0.0)))
     return (
-        Matrix.Rotation(-ry, 4, "Y")
+        Matrix.Rotation(rz, 4, "Z")
         @ Matrix.Rotation(rx, 4, "X")
-        @ Matrix.Rotation(rz, 4, "Z")
+        @ Matrix.Rotation(-ry, 4, "Y")
     )
 
 
@@ -252,10 +254,11 @@ def _box_geometry(shape: dict[str, Any], texture_size: tuple[float, float]) -> t
     while len(start) < 3: start.append(0)
     while len(end) < 3: end.append(0)
     inflate = float(shape.get("inflate", 0.0))
-    position = list(shape.get("position", [0, 0, 0]))
-    while len(position) < 3: position.append(0)
-    lo = [min(float(start[i]), float(end[i])) - inflate + float(position[i]) for i in range(3)]
-    hi = [max(float(start[i]), float(end[i])) + inflate + float(position[i]) for i in range(3)]
+    # Shape position is its transform origin, not part of the vertex geometry.
+    # Baking it here makes the position rotate around the parent part origin and
+    # scatters multi-shape custom models when a shape has its own rotation.
+    lo = [min(float(start[i]), float(end[i])) - inflate for i in range(3)]
+    hi = [max(float(start[i]), float(end[i])) + inflate for i in range(3)]
     mi_vertices = [
         (lo[0], lo[1], lo[2]), (hi[0], lo[1], lo[2]), (hi[0], hi[1], lo[2]), (lo[0], hi[1], lo[2]),
         (lo[0], lo[1], hi[2]), (hi[0], lo[1], hi[2]), (hi[0], hi[1], hi[2]), (lo[0], hi[1], hi[2]),
@@ -300,13 +303,11 @@ def _box_geometry(shape: dict[str, Any], texture_size: tuple[float, float]) -> t
 def _plane_geometry(shape: dict[str, Any], texture_size: tuple[float, float]) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]], list[tuple[float, float]]]:
     start = list(shape.get("from", [-8, 0, -8]))
     end = list(shape.get("to", [8, 0, 8]))
-    position = list(shape.get("position", [0, 0, 0]))
     while len(start) < 3: start.append(0)
     while len(end) < 3: end.append(0)
-    while len(position) < 3: position.append(0)
-    x0, x1 = sorted((float(start[0]) + position[0], float(end[0]) + position[0]))
-    y = float(start[1]) + position[1]
-    z0, z1 = sorted((float(start[2]) + position[2], float(end[2]) + position[2]))
+    x0, x1 = sorted((float(start[0]), float(end[0])))
+    y = float(start[1])
+    z0, z1 = sorted((float(start[2]), float(end[2])))
     vertices = [core.mi_vector(value) for value in ((x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1))]
     faces = [(0, 1, 2, 3)]
     if not shape.get("hide_back", False):
@@ -375,9 +376,10 @@ def _create_model_shape(name: str, shape: dict[str, Any], texture_size: tuple[fl
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
     rotation = _mimodel_rotation_matrix(shape.get("rotation", [0, 0, 0]))
+    location = core.mi_vector(shape.get("position", [0, 0, 0]))
     scale = list(shape.get("scale", [1, 1, 1]))
     while len(scale) < 3: scale.append(1)
-    obj.matrix_basis = _transform_matrix((0.0, 0.0, 0.0), rotation, (float(scale[0]), float(scale[2]), float(scale[1])))
+    obj.matrix_basis = _transform_matrix(location, rotation, (float(scale[0]), float(scale[2]), float(scale[1])))
     return obj
 
 
@@ -453,13 +455,43 @@ def _apply_model_bend(part_obj: bpy.types.Object, state: dict[str, Any]) -> None
     allowed = definition.get("axis", ["x", "y", "z"])
     if isinstance(allowed, str):
         allowed = [allowed]
+    allowed = [str(axis).lower() for axis in allowed]
+
+    def axis_setting(name: str, axis: str, default: float) -> float:
+        value = definition.get(name, default)
+        if isinstance(value, (list, tuple)):
+            try:
+                index = allowed.index(axis)
+            except ValueError:
+                return default
+            value = value[index] if index < len(value) else default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def axis_inverted(axis: str) -> bool:
+        value = definition.get("invert", False)
+        if isinstance(value, (list, tuple)):
+            try:
+                index = allowed.index(axis)
+            except ValueError:
+                return False
+            return bool(value[index]) if index < len(value) else False
+        return bool(value)
+
     # The .mimodel JSON axes are Y-up, so JSON z controls engine Y and JSON y
     # controls engine Z.
     for key, axis in (("ROT_X", "x"), ("ROT_Y", "z"), ("ROT_Z", "y")):
         if axis not in allowed:
             angles[key] = 0.0
-    if definition.get("invert"):
-        angles = {key: -value for key, value in angles.items()}
+            continue
+        angles[key] = min(
+            axis_setting("direction_max", axis, 180.0),
+            max(axis_setting("direction_min", axis, -180.0), angles[key]),
+        )
+        if axis_inverted(axis):
+            angles[key] = -angles[key]
     if not any(abs(value) > 1e-8 for value in angles.values()):
         return
     rotation = _engine_rotation_matrix(angles).to_3x3()
@@ -718,8 +750,16 @@ class SceneImporter:
         if not model:
             self.report.missing.append(f"{label}: {error}")
             return _placeholder(label, error or "model not found", collection, self.project, timeline, self.report)
+        state = core.frame0_state(timeline)
+        texture_resource = self.project.resource(state.get("TEXTURE_OBJ"))
+        if texture_resource:
+            instance_texture = core.project_resource_path(self.project, texture_resource)
+            if instance_texture and instance_texture.is_file():
+                texture = instance_texture
+            else:
+                self.report.missing.append(f"{label}: frame-0 texture resource is missing")
         root = _new_empty(label, collection)
-        _apply_transform(root, core.frame0_state(timeline))
+        _apply_transform(root, state)
         _metadata(root, self.project, timeline, template, model_path)
         part_map = _build_mimodel(model, model_path, root, collection, self.project, self.assets, texture, self.report)
         for bodypart in self._descendants(str(timeline.get("id"))):
@@ -761,9 +801,10 @@ class SceneImporter:
     def _import_item(self, timeline: dict[str, Any], template: dict[str, Any] | None, collection: bpy.types.Collection) -> bpy.types.Object:
         state = core.frame0_state(timeline)
         item = dict((template or {}).get("item", {}))
-        changed = state.get("ITEM") or state.get("ITEM_NAME")
-        if isinstance(changed, str):
-            item["name"] = changed
+        if self.options.honor_item_keyframe_changes:
+            changed = state.get("ITEM") or state.get("ITEM_NAME")
+            if isinstance(changed, str):
+                item["name"] = changed
         name = str(item.get("name") or timeline.get("name") or "Item")
         texture = _resolve_texture(item.get("tex"), None, self.project, self.assets)
         if not texture and self.assets:
@@ -846,7 +887,17 @@ class SceneImporter:
     def _import_scenery(self, timeline: dict[str, Any], template: dict[str, Any] | None, collection: bpy.types.Collection) -> bpy.types.Object:
         resource = self.project.resource((template or {}).get("scenery"))
         if not resource:
-            return _placeholder(timeline.get("name") or "World Scenery", "no scenery resource is assigned", collection, self.project, timeline, self.report)
+            # Mine-imator creates an empty scenery slot for a new project.  It
+            # has no visible geometry, so a rendered missing-resource cube is
+            # misleading (and showed up as the reported random white block).
+            root = _new_empty(timeline.get("name") or "Empty World Scenery", collection, "CUBE")
+            _apply_transform(root, core.frame0_state(timeline))
+            _metadata(root, self.project, timeline, template)
+            root["mi_scenery_note"] = "No scenery resource is assigned; nothing visible to import"
+            root.show_name = True
+            self.report.notes.append(f"{root.name}: empty scenery slot contains no visible world geometry")
+            self.report.created["empty_scenery"] += 1
+            return root
         mineways = core.find_mineways(self.options.mineways_path)
         if not mineways:
             bounds = core.world_bounds({"start": resource.get("world_box_start"), "end": resource.get("world_box_end")})

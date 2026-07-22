@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator MCprep Bridge",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 1, 1),
+    "version": (0, 1, 2),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import frame-zero Mine-imator scenes with editable Minecraft geometry",
@@ -85,6 +85,14 @@ class MIBRIDGE_PG_settings(PropertyGroup):
         description="Run MCprep's material preparation after geometry creation when MCprep is enabled",
         default=True,
     )
+    honor_item_keyframe_changes: BoolProperty(
+        name="Use frame-0 item swaps",
+        description=(
+            "Override each template item with its frame-0 ITEM/ITEM_NAME value; "
+            "leave disabled for projects whose saved compatibility hint is stale"
+        ),
+        default=False,
+    )
 
 
 def _options(settings: MIBRIDGE_PG_settings) -> ImportOptions:
@@ -110,6 +118,7 @@ def _options(settings: MIBRIDGE_PG_settings) -> ImportOptions:
         asset_pack_path=bpy.path.abspath(settings.asset_pack_path) if settings.asset_pack_path else "",
         mineways_path=bpy.path.abspath(settings.mineways_path) if settings.mineways_path else "",
         use_mcprep=settings.use_mcprep,
+        honor_item_keyframe_changes=settings.honor_item_keyframe_changes,
     )
 
 
@@ -200,6 +209,7 @@ def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings) -
     ):
         categories.prop(settings, prop)
     layout.prop(settings, "use_mcprep")
+    layout.prop(settings, "honor_item_keyframe_changes")
     row = layout.row(align=True)
     row.operator("mibridge.preflight", icon="CHECKMARK")
     row.operator("mibridge.import_scene", icon="IMPORT")

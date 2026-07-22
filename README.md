@@ -1,4 +1,4 @@
-# Mine-imator MCprep Bridge 0.1.1
+# Mine-imator MCprep Bridge 0.1.2
 
 Imports the frame-zero static state of Mine-imator 2.0.2 format-34 projects
 into Blender 5.2. The add-on creates a new uniquely named collection on every
@@ -8,7 +8,7 @@ never creates F-curves or other animation data.
 ## Install and use
 
 1. In Blender, choose **Edit > Preferences > Get Extensions > Install from Disk**.
-2. Select `mineimator_mcprep_bridge-0.1.1.zip` and enable the extension.
+2. Select `mineimator_mcprep_bridge-0.1.2.zip` and enable the extension.
 3. Open **File > Import > Mine-imator Project**, or the **MI Bridge** tab in the
    3D View sidebar.
 4. Select a `.miproject` file (or paste a directory containing exactly one),
@@ -29,6 +29,21 @@ magenta placeholder containing exact setup and crop information.
 Particle spawners become labeled placeholders. Audio and all keyframes after
 frame zero are intentionally ignored.
 
+The **Use frame-0 item swaps** option is disabled by default. Mine-imator can
+leave stale `ITEM_NAME` compatibility hints in a saved project (the TEST
+fixture labels all five visibly different items as a leather helmet). Enable
+the option only when the frame-0 swap is known to be intentional.
+
+## 0.1.2 fixes
+
+- Per-instance frame-0 skin and model texture overrides.
+- Correct mixed-axis scene rotation order and declared bend-angle limits.
+- Correct local positions and rotations for multi-shape custom `.mimodel`
+  files, including the five-piece Server Obliterator fixture.
+- Template item identity by default, with opt-in frame-0 item swaps.
+- Empty Mine-imator scenery slots now remain non-rendering viewport markers
+  instead of producing an unexplained placeholder cube.
+
 ## 0.1.1 fixes
 
 - Exact mixed-axis Mine-imator rotation composition for frame-zero poses.
@@ -37,3 +52,17 @@ frame zero are intentionally ignored.
 - Relative hierarchy linking for held items and nested timelines.
 - Automatic Mineways detection plus Mine-imator/Minecraft world-axis
   correction for scenery placement.
+
+## Development and verification
+
+Run the pure parser tests from the add-on folder:
+
+```powershell
+python tests\test_core.py
+```
+
+Run the Blender integration fixture from the add-on folder:
+
+```powershell
+& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python tests\blender_test_project.py -- --project 'C:\path\to\TEST.miproject'
+```
