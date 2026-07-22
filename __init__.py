@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 bl_info = {
-    "name": "Mine-imator MCprep Bridge",
+    "name": "Mine-imator Suite + Import for Blender",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 3, 0),
+    "version": (0, 3, 1),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
-    "description": "Import frame-zero Mine-imator scenes with editable Minecraft geometry",
+    "description": "Import Mine-imator scenes, assets, and environments for Blender and MCprep",
     "category": "Import-Export",
 }
 
