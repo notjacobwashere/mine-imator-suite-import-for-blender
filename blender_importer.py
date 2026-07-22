@@ -68,6 +68,7 @@ class ImportOptions:
     use_mcprep: bool = True
     honor_item_keyframe_changes: bool = False
     remove_startup_cube: bool = True
+    mineimator_suite: bool = True
 
 
 @dataclass
@@ -1158,6 +1159,16 @@ class SceneImporter:
     def _environment(self) -> None:
         if "environment" not in self.options.categories:
             return
+        if self.options.mineimator_suite:
+            from . import suite_environment
+            suite_environment.build_suite(
+                self.context,
+                self.collections["environment"],
+                self.project,
+                self.assets,
+                self.report,
+            )
+            return
         background = self.project.data.get("background", {})
         if not isinstance(background, dict):
             return
@@ -1220,7 +1231,10 @@ class SceneImporter:
     def _mcprep_materials(self) -> None:
         if not self.options.use_mcprep:
             return
-        meshes = [obj for obj in self.root_collection.all_objects if obj.type == "MESH"] if self.root_collection else []
+        meshes = [
+            obj for obj in self.root_collection.all_objects
+            if obj.type == "MESH" and not obj.get("mi_suite_id")
+        ] if self.root_collection else []
         if not meshes:
             return
         try:

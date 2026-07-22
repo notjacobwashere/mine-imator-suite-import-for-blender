@@ -19,10 +19,76 @@ import tempfile
 import zipfile
 
 
-ADDON_VERSION = "0.1.5"
+ADDON_VERSION = "0.2.0"
 SUPPORTED_FORMAT = 34
 MI_UNITS_PER_BLOCK = 16.0
 NULL_IDS = {None, "", "null", "default", -1}
+
+MI_ENVIRONMENT_DEFAULTS: dict[str, Any] = {
+    "image_show": False,
+    "image": "null",
+    "image_type": "image",
+    "image_stretch": True,
+    "image_box_mapped": False,
+    "image_rotation": 0.0,
+    "sky_sun_tex": "default",
+    "sky_sun_angle": 0.0,
+    "sky_sun_scale": 1.0,
+    "sky_moon_tex": "default",
+    "sky_moon_phase": 0,
+    "sky_moon_angle": 0.0,
+    "sky_moon_scale": 1.0,
+    "sky_time": -45.0,
+    "sky_rotation": 0.0,
+    "sunlight_strength": 1.0,
+    "sunlight_angle": 0.526,
+    "twilight": True,
+    "sky_clouds_show": True,
+    "sky_clouds_mode": "normal",
+    "sky_clouds_tex": "default",
+    "sky_clouds_speed": 1.0,
+    "sky_clouds_height": 1024.0,
+    "sky_clouds_size": 1536.0,
+    "sky_clouds_thickness": 64.0,
+    "sky_clouds_offset": 0.0,
+    "ground_show": True,
+    "ground_name": "block/grass_block_top",
+    "ground_tex": "default",
+    "ground_tex_material": "default",
+    "ground_tex_normal": "default",
+    "biome": "plains",
+    "sky_color": "#78A7FF",
+    "sky_clouds_color": "#FFFFFF",
+    "sunlight_color": "#FFF7E4",
+    "ambient_color": "#66708C",
+    "night_color": "#0E0E18",
+    "foliage_color": "#77AB2F",
+    "grass_color": "#91BD59",
+    "water_color": "#3E75E1",
+    "leaves_oak_color": "#77AB2F",
+    "leaves_spruce_color": "#62A857",
+    "leaves_birch_color": "#62A857",
+    "leaves_jungle_color": "#77AB2F",
+    "leaves_acacia_color": "#77AB2F",
+    "leaves_dark_oak_color": "#77AB2F",
+    "leaves_mangrove_color": "#77AB2F",
+    "fog_show": True,
+    "fog_sky": True,
+    "fog_color_custom": False,
+    "fog_color": "#78A7FF",
+    "fog_object_color_custom": False,
+    "fog_object_color": "#78A7FF",
+    "wind": True,
+    "wind_speed": 0.1,
+    "wind_strength": 0.5,
+    "wind_direction": 45.0,
+    "wind_directional_speed": 0.2,
+    "wind_directional_strength": 1.5,
+    "fog_distance": 10000.0,
+    "fog_size": 2000.0,
+    "fog_height": 1250.0,
+    "texture_animation_speed": 0.25,
+}
 
 
 class BridgeError(RuntimeError):
@@ -265,6 +331,73 @@ def world_bounds(resource: dict[str, Any]) -> tuple[tuple[int, int, int], tuple[
 def safe_filename(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
     return cleaned or "asset"
+
+
+def environment_state(data: dict[str, Any], *, force_ground: bool = False) -> dict[str, Any]:
+    """Return a complete format-34 environment dictionary."""
+    state = dict(MI_ENVIRONMENT_DEFAULTS)
+    background = data.get("background", data)
+    if isinstance(background, dict):
+        state.update(background)
+    if force_ground:
+        state["ground_show"] = True
+    return state
+
+
+def sky_time_to_hours(rotation: float) -> float:
+    """Convert Mine-imator's sky rotation to a normalized 24-hour clock."""
+    return ((float(rotation) / 360.0) * 24.0 + 12.0) % 24.0
+
+
+def hours_to_sky_time(hours: float) -> float:
+    """Convert a normalized 24-hour clock value to Mine-imator rotation."""
+    return ((float(hours) % 24.0) - 12.0) * 15.0
+
+
+def sky_sun_direction(sky_time: float, sky_rotation: float) -> tuple[float, float, float]:
+    """Reproduce background_sky_update_sun from Mine-imator's source."""
+    elevation = math.radians(float(sky_time) + 90.0)
+    azimuth = math.radians(float(sky_rotation) - 90.0)
+    vector = (
+        math.cos(azimuth) * math.cos(elevation),
+        -math.sin(azimuth) * math.cos(elevation),
+        math.sin(elevation),
+    )
+    length = math.sqrt(sum(axis * axis for axis in vector)) or 1.0
+    return tuple(axis / length for axis in vector)
+
+
+def _smoothstep(value: float) -> float:
+    value = max(0.0, min(1.0, float(value)))
+    return value * value * (3.0 - 2.0 * value)
+
+
+def environment_light_factors(sky_time: float, sky_rotation: float = 0.0) -> dict[str, float]:
+    """Return Mine-imator-style day, night, sunrise and sunset factors."""
+    direction = sky_sun_direction(sky_time, sky_rotation)
+    dot_up = direction[2]
+    night_input = (1.0 - max(0.0, dot_up) - 0.85) / 0.15
+    night = _smoothstep(night_input)
+    daylight = 1.0 - night
+    d = max(0.0, min(1.0, (dot_up + 0.175) / 0.5))
+    rise_set = (1.0 - abs(d - 0.5) * 2.0)
+    rise_set = _smoothstep(rise_set)
+    normalized = float(sky_time) % 360.0
+    sunrise = rise_set if normalized < 180.0 else 0.0
+    sunset = rise_set if normalized > 180.0 else 0.0
+    return {"day": daylight, "night": night, "sunrise": sunrise, "sunset": sunset}
+
+
+def moon_phase_uv(phase: int) -> tuple[float, float, float, float]:
+    """Return Blender UV bounds for Minecraft's 4x2 moon phase atlas."""
+    index = int(phase) % 8
+    column = index % 4
+    row_from_top = index // 4
+    u0 = column / 4.0
+    u1 = (column + 1) / 4.0
+    v0 = (1 - row_from_top) / 2.0
+    v1 = (2 - row_from_top) / 2.0
+    return (u0, v0, u1, v1)
 
 
 def find_mineways(override: str = "") -> Path | None:
