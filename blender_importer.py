@@ -934,11 +934,17 @@ class SceneImporter:
             # Mine-imator creates an empty scenery slot for a new project.  It
             # has no visible geometry, so a rendered missing-resource cube is
             # misleading (and showed up as the reported random white block).
-            root = _new_empty(timeline.get("name") or "Empty World Scenery", collection, "CUBE")
+            root = _new_empty(timeline.get("name") or "Empty World Scenery", collection, "PLAIN_AXES")
             _apply_transform(root, core.frame0_state(timeline))
             _metadata(root, self.project, timeline, template)
             root["mi_scenery_note"] = "No scenery resource is assigned; nothing visible to import"
-            root.show_name = True
+            # Keep the empty slot for source accounting and metadata, but make
+            # it completely unobtrusive. A CUBE display looked like imported
+            # white geometry in solid/material-preview mode.
+            root.empty_display_size = 0.05
+            root.show_name = False
+            root.hide_viewport = True
+            root.hide_render = True
             self.report.notes.append(f"{root.name}: empty scenery slot contains no visible world geometry")
             self.report.created["empty_scenery"] += 1
             return root
