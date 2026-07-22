@@ -50,10 +50,9 @@ the current frame and restores the scene's original render settings afterward.
 - Adopts the public name **Mine-imator Suite + Import for Blender** while
   retaining the stable extension ID for seamless upgrades.
 
-The **Use frame-0 item swaps** option is disabled by default. Mine-imator can
-leave stale `ITEM_NAME` compatibility hints in a saved project (the TEST
-fixture labels all five visibly different items as a leather helmet). Enable
-the option only when the frame-0 swap is known to be intentional.
+The **Use frame-0 item swaps** option is disabled by default because some
+Mine-imator projects contain stale `ITEM_NAME` compatibility hints. Enable the
+option only when the frame-0 swap is known to be intentional.
 
 ## 0.2.0 Mine-imator Suite
 
@@ -92,7 +91,7 @@ the option only when the frame-0 swap is known to be intentional.
 - Per-instance frame-0 skin and model texture overrides.
 - Correct mixed-axis scene rotation order and declared bend-angle limits.
 - Correct local positions and rotations for multi-shape custom `.mimodel`
-  files, including the five-piece Server Obliterator fixture.
+  files.
 - Template item identity by default, with opt-in frame-0 item swaps.
 - Empty Mine-imator scenery slots now remain non-rendering viewport markers
   instead of producing an unexplained placeholder cube.
@@ -105,17 +104,3 @@ the option only when the frame-0 swap is known to be intentional.
 - Relative hierarchy linking for held items and nested timelines.
 - Automatic Mineways detection plus Mine-imator/Minecraft world-axis
   correction for scenery placement.
-
-## Development and verification
-
-Run the pure parser tests from the add-on folder:
-
-```powershell
-python tests\test_core.py
-```
-
-Run the Blender integration fixture from the add-on folder:
-
-```powershell
-& 'C:\Program Files\Blender Foundation\Blender 5.2\blender.exe' --background --factory-startup --python tests\blender_test_project.py -- --project 'C:\path\to\TEST.miproject'
-```
