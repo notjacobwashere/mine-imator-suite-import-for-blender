@@ -1,0 +1,39 @@
+# Mine-imator MCprep Bridge 0.1.1
+
+Imports the frame-zero static state of Mine-imator 2.0.2 format-34 projects
+into Blender 5.2. The add-on creates a new uniquely named collection on every
+import, keeps Mine-imator model parts as editable pivot/mesh hierarchies, and
+never creates F-curves or other animation data.
+
+## Install and use
+
+1. In Blender, choose **Edit > Preferences > Get Extensions > Install from Disk**.
+2. Select `mineimator_mcprep_bridge-0.1.1.zip` and enable the extension.
+3. Open **File > Import > Mine-imator Project**, or the **MI Bridge** tab in the
+   3D View sidebar.
+4. Select a `.miproject` file (or paste a directory containing exactly one),
+   choose categories, run **Preflight**, then **Import Scene**.
+5. Read the full result in the Text Editor's `Mine-imator Bridge Report` text.
+
+Project-local files take priority over the matching Mine-imator Minecraft
+asset ZIP. MCprep material preparation is invoked when its operator is
+available, while image textures retain nearest-neighbor filtering and alpha.
+
+Mineways is optional for the rest of the import. If configured or found in a
+common portable/install location, the bridge
+uses Mineways' headless scripting interface with the saved world path and the
+corrected X/Y/Z crop, imports the resulting OBJ, and includes it in MCprep
+material preparation. If Mineways is unavailable, world scenery becomes a
+magenta placeholder containing exact setup and crop information.
+
+Particle spawners become labeled placeholders. Audio and all keyframes after
+frame zero are intentionally ignored.
+
+## 0.1.1 fixes
+
+- Exact mixed-axis Mine-imator rotation composition for frame-zero poses.
+- Correct Mine-imator cuboid UV face layout and mirrored textures.
+- Blocky bend-plane splitting, eliminating stretched cuboid faces.
+- Relative hierarchy linking for held items and nested timelines.
+- Automatic Mineways detection plus Mine-imator/Minecraft world-axis
+  correction for scenery placement.
