@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator MCprep Bridge",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 1, 4),
+    "version": (0, 1, 5),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import frame-zero Mine-imator scenes with editable Minecraft geometry",
@@ -93,6 +93,11 @@ class MIBRIDGE_PG_settings(PropertyGroup):
         ),
         default=False,
     )
+    remove_startup_cube: BoolProperty(
+        name="Remove untouched Blender startup cube",
+        description="Remove only Blender's pristine default Cube when its original Camera and Light are still present",
+        default=True,
+    )
 
 
 def _options(settings: MIBRIDGE_PG_settings) -> ImportOptions:
@@ -119,6 +124,7 @@ def _options(settings: MIBRIDGE_PG_settings) -> ImportOptions:
         mineways_path=bpy.path.abspath(settings.mineways_path) if settings.mineways_path else "",
         use_mcprep=settings.use_mcprep,
         honor_item_keyframe_changes=settings.honor_item_keyframe_changes,
+        remove_startup_cube=settings.remove_startup_cube,
     )
 
 
@@ -210,6 +216,7 @@ def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings) -
         categories.prop(settings, prop)
     layout.prop(settings, "use_mcprep")
     layout.prop(settings, "honor_item_keyframe_changes")
+    layout.prop(settings, "remove_startup_cube")
     row = layout.row(align=True)
     row.operator("mibridge.preflight", icon="CHECKMARK")
     row.operator("mibridge.import_scene", icon="IMPORT")

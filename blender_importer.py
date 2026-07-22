@@ -67,6 +67,7 @@ class ImportOptions:
     mineways_path: str = ""
     use_mcprep: bool = True
     honor_item_keyframe_changes: bool = False
+    remove_startup_cube: bool = True
 
 
 @dataclass
@@ -118,6 +119,55 @@ def _hex_color(value: Any, alpha: float = 1.0) -> tuple[float, float, float, flo
         return tuple(int(raw[index:index + 2], 16) / 255.0 for index in (0, 2, 4)) + (alpha,)
     except (ValueError, IndexError):
         return (1.0, 1.0, 1.0, alpha)
+
+
+def _remove_untouched_startup_cube(context: bpy.types.Context, report: ImportReport) -> bool:
+    """Remove only Blender's pristine default cube, never a user-authored cube."""
+    cube = bpy.data.objects.get("Cube")
+    if not cube or cube.type != "MESH" or cube.parent or cube.animation_data:
+        return False
+    if tuple(cube.keys()) or cube.modifiers or cube.vertex_groups:
+        return False
+    if len(cube.material_slots) > 1:
+        return False
+    startup_material = cube.material_slots[0].material if cube.material_slots else None
+    if startup_material and (
+        startup_material.name != "Material"
+        or any(abs(value - expected) > 1e-6 for value, expected in zip(startup_material.diffuse_color, (0.8, 0.8, 0.8, 1.0)))
+    ):
+        return False
+    if len(cube.users_collection) != 1:
+        return False
+    collection = cube.users_collection[0]
+    if collection.name != "Collection" or collection not in context.scene.collection.children[:]:
+        return False
+    siblings = {(obj.name, obj.type) for obj in collection.objects}
+    if ("Camera", "CAMERA") not in siblings or ("Light", "LIGHT") not in siblings:
+        return False
+    if any(abs(value) > 1e-6 for value in cube.location):
+        return False
+    if any(abs(value) > 1e-6 for value in cube.rotation_euler):
+        return False
+    if any(abs(value - 1.0) > 1e-6 for value in cube.scale):
+        return False
+    mesh = cube.data
+    if mesh.name != "Cube" or (len(mesh.vertices), len(mesh.edges), len(mesh.polygons)) != (8, 12, 6):
+        return False
+    expected = {
+        (-1.0, -1.0, -1.0), (-1.0, -1.0, 1.0), (-1.0, 1.0, -1.0), (-1.0, 1.0, 1.0),
+        (1.0, -1.0, -1.0), (1.0, -1.0, 1.0), (1.0, 1.0, -1.0), (1.0, 1.0, 1.0),
+    }
+    coordinates = {tuple(round(axis, 6) for axis in vertex.co) for vertex in mesh.vertices}
+    if coordinates != expected:
+        return False
+    bpy.data.objects.remove(cube, do_unlink=True)
+    if mesh.users == 0:
+        bpy.data.meshes.remove(mesh)
+    if startup_material and startup_material.users == 0:
+        bpy.data.materials.remove(startup_material)
+    report.notes.append("Removed Blender's untouched startup cube")
+    report.created["startup_cube_removed"] += 1
+    return True
 
 
 def _link_object(obj: bpy.types.Object, collection: bpy.types.Collection) -> None:
@@ -721,6 +771,8 @@ class SceneImporter:
 
     def import_scene(self) -> ImportReport:
         self.prepare_assets()
+        if self.options.remove_startup_cube:
+            _remove_untouched_startup_cube(self.context, self.report)
         self.create_collections()
         for timeline in self.project.root_timelines():
             timeline_type = str(timeline.get("type", "")).lower()
