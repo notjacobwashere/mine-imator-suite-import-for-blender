@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator MCprep Bridge",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import frame-zero Mine-imator scenes with editable Minecraft geometry",
@@ -20,7 +20,7 @@ from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProp
 from bpy.types import Operator, Panel, PropertyGroup
 from bpy_extras.io_utils import ImportHelper
 
-from . import core, suite_environment
+from . import core, render_export, suite_environment
 from .blender_importer import CATEGORY_NAMES, ImportOptions, SceneImporter, preflight, write_report
 
 
@@ -573,9 +573,11 @@ def register():
     bpy.types.Scene.mi_bridge = PointerProperty(type=MIBRIDGE_PG_settings)
     bpy.types.Scene.mi_environment = PointerProperty(type=MIBRIDGE_PG_environment)
     bpy.types.TOPBAR_MT_file_import.append(_menu_import)
+    render_export.register()
 
 
 def unregister():
+    render_export.unregister()
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     del bpy.types.Scene.mi_bridge
     del bpy.types.Scene.mi_environment

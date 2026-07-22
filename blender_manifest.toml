@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "mineimator_mcprep_bridge"
-version = "0.2.0"
+version = "0.3.0"
 name = "Mine-imator MCprep Bridge"
 tagline = "Import static Mine-imator scenes for Blender and MCprep"
 maintainer = "Mine-imator MCprep Bridge contributors"
@@ -9,4 +9,4 @@ blender_version_min = "5.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 [permissions]
-files = "Read projects and extract asset textures to temporary storage"
+files = "Read Mine-imator assets and save rendered PNG images"
