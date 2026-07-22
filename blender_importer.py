@@ -592,40 +592,78 @@ def _model_definition(template: dict[str, Any], project: core.ProjectIndex, asse
     return model, model_path, texture_override, None
 
 
-def _pixel_item(name: str, image_path: Path, collection: bpy.types.Collection, report: ImportReport) -> bpy.types.Object:
+def _pixel_item(
+    name: str,
+    image_path: Path,
+    collection: bpy.types.Collection,
+    report: ImportReport,
+    rotation_point: Any = (8.0, 0.0, 0.5),
+) -> bpy.types.Object:
+    """Build Mine-imator's one-unit item slab around its saved pivot.
+
+    Blender exposes image pixels bottom-up.  Mine-imator's item buffer maps
+    that bottom row to local Z=0 and uses a fixed one-MI-unit depth, regardless
+    of texture resolution.  Building only boundary side faces avoids both the
+    scrambled per-pixel UVs and the thousands of hidden internal faces from
+    the previous cube-per-pixel approximation.
+    """
     image = bpy.data.images.load(str(image_path), check_existing=True)
     width, height = image.size
     pixels = list(image.pixels[:])
-    opaque: list[tuple[int, int]] = []
+    opaque: set[tuple[int, int]] = set()
     for y in range(height):
         for x in range(width):
             if pixels[(y * width + x) * 4 + 3] > 0.01:
-                opaque.append((x, y))
+                opaque.add((x, y))
     if not opaque:
         raise ValueError("item texture contains no visible pixels")
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int, int]] = []
     uvs: list[tuple[float, float]] = []
-    pixel = 1.0 / max(width, height)
-    thickness = pixel * 0.8
-    for x, y in opaque:
-        cx = (x + 0.5 - width / 2) * pixel
-        cz = (height / 2 - y - 0.5) * pixel
-        lo = (cx - pixel / 2, -thickness / 2, cz - pixel / 2)
-        hi = (cx + pixel / 2, thickness / 2, cz + pixel / 2)
+    point = list(rotation_point) if isinstance(rotation_point, (list, tuple)) else [8.0, 0.0, 0.5]
+    point = (point + [0.0, 0.0, 0.5])[:3]
+    pivot = Vector(core.mi_vector(point))
+    size_x = 1.0
+    size_z = height / width if width > height else 1.0
+    if height > width:
+        size_x = width / height
+    front_y = -1.0 / core.MI_UNITS_PER_BLOCK - pivot.y
+    back_y = -pivot.y
+
+    def add_quad(coords: list[tuple[float, float, float]], face_uvs: list[tuple[float, float]]) -> None:
         base = len(vertices)
-        vertices.extend([(lo[0], lo[1], lo[2]), (hi[0], lo[1], lo[2]), (hi[0], hi[1], lo[2]), (lo[0], hi[1], lo[2]), (lo[0], lo[1], hi[2]), (hi[0], lo[1], hi[2]), (hi[0], hi[1], hi[2]), (lo[0], hi[1], hi[2])])
-        local_faces = [(0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (3, 7, 6, 2), (1, 2, 6, 5), (0, 4, 7, 3)]
-        faces.extend(tuple(base + index for index in face) for face in local_faces)
-        uv_rect = [(x / width, 1 - (y + 1) / height), ((x + 1) / width, 1 - (y + 1) / height), ((x + 1) / width, 1 - y / height), (x / width, 1 - y / height)]
-        uvs.extend(uv_rect for _ in range(6))
-    flat_uvs = [uv for group in uvs for uv in group]
+        vertices.extend(coords)
+        faces.append((base, base + 1, base + 2, base + 3))
+        uvs.extend(face_uvs)
+
+    for x, y in sorted(opaque, key=lambda value: (value[1], value[0])):
+        x0 = x / width * size_x - pivot.x
+        x1 = (x + 1) / width * size_x - pivot.x
+        z0 = y / height * size_z - pivot.z
+        z1 = (y + 1) / height * size_z - pivot.z
+        yf = front_y
+        yb = back_y
+        u0, u1 = x / width, (x + 1) / width
+        v0, v1 = y / height, (y + 1) / height
+        center_u, center_v = (u0 + u1) / 2.0, (v0 + v1) / 2.0
+
+        add_quad([(x0, yf, z0), (x1, yf, z0), (x1, yf, z1), (x0, yf, z1)], [(u0, v0), (u1, v0), (u1, v1), (u0, v1)])
+        add_quad([(x1, yb, z0), (x0, yb, z0), (x0, yb, z1), (x1, yb, z1)], [(u1, v0), (u0, v0), (u0, v1), (u1, v1)])
+        if (x - 1, y) not in opaque:
+            add_quad([(x0, yb, z0), (x0, yf, z0), (x0, yf, z1), (x0, yb, z1)], [(center_u, v0), (center_u, v0), (center_u, v1), (center_u, v1)])
+        if (x + 1, y) not in opaque:
+            add_quad([(x1, yf, z0), (x1, yb, z0), (x1, yb, z1), (x1, yf, z1)], [(center_u, v0), (center_u, v0), (center_u, v1), (center_u, v1)])
+        if (x, y - 1) not in opaque:
+            add_quad([(x0, yf, z0), (x0, yb, z0), (x1, yb, z0), (x1, yf, z0)], [(u0, center_v), (u0, center_v), (u1, center_v), (u1, center_v)])
+        if (x, y + 1) not in opaque:
+            add_quad([(x0, yb, z1), (x0, yf, z1), (x1, yf, z1), (x1, yb, z1)], [(u0, center_v), (u0, center_v), (u1, center_v), (u1, center_v)])
+
     mesh = bpy.data.meshes.new(f"{name} Mesh")
     mesh.from_pydata(vertices, [], faces)
     material = _new_material(f"MI Item {image_path.stem}", image_path)
     mesh.materials.append(material)
     uv_layer = mesh.uv_layers.new(name="UVMap")
-    for loop, uv in zip(mesh.loops, flat_uvs):
+    for loop, uv in zip(mesh.loops, uvs):
         uv_layer.data[loop.index].uv = uv
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
@@ -814,7 +852,13 @@ class SceneImporter:
         if not texture:
             self.report.missing.append(f"{name}: item texture not found")
             return _placeholder(name, "item texture not found", collection, self.project, timeline, self.report)
-        obj = _pixel_item(timeline.get("name") or Path(name).name, texture, collection, self.report)
+        obj = _pixel_item(
+            timeline.get("name") or Path(name).name,
+            texture,
+            collection,
+            self.report,
+            timeline.get("rot_point", (8.0, 0.0, 0.5)),
+        )
         _apply_transform(obj, state)
         _metadata(obj, self.project, timeline, template, texture)
         return obj
