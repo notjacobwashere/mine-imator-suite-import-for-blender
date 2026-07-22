@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "mineimator_mcprep_bridge"
-version = "0.3.3"
+version = "0.3.4"
 name = "Mine-imator Suite + Import for Blender"
 tagline = "Import Mine-imator scenes and environments into Blender"
 maintainer = "Mine-imator MCprep Bridge contributors"

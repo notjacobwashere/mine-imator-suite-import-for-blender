@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator Suite + Import for Blender",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 3, 3),
+    "version": (0, 3, 4),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import Mine-imator scenes, assets, and environments for Blender and MCprep",
@@ -181,6 +181,11 @@ class MIBRIDGE_PG_settings(PropertyGroup):
         update=_suite_toggle_update,
     )
     import_characters: BoolProperty(name="Characters and entities", default=True)
+    outer_layers_3d: BoolProperty(
+        name="3D character outer layers",
+        description="Turn opaque player-skin hat, jacket, sleeve, and pants pixels into real 3D geometry",
+        default=False,
+    )
     import_items: BoolProperty(name="Items", default=True)
     import_blocks: BoolProperty(name="Blocks and special blocks", default=True)
     import_models: BoolProperty(name="Custom models", default=True)
@@ -238,6 +243,7 @@ def _options(settings: MIBRIDGE_PG_settings) -> ImportOptions:
         honor_item_keyframe_changes=settings.honor_item_keyframe_changes,
         remove_startup_cube=settings.remove_startup_cube,
         mineimator_suite=settings.mineimator_suite,
+        outer_layers_3d=settings.outer_layers_3d,
     )
 
 
@@ -306,9 +312,22 @@ class MIBRIDGE_OT_import_file(Operator, ImportHelper):
     bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".miproject"
     filter_glob: StringProperty(default="*.miproject", options={"HIDDEN"})
+    outer_layers_3d: BoolProperty(
+        name="3D character outer layers",
+        description="Turn opaque player-skin hat, jacket, sleeve, and pants pixels into real 3D geometry",
+        default=False,
+    )
+
+    def invoke(self, context, event):
+        self.outer_layers_3d = context.scene.mi_bridge.outer_layers_3d
+        return super().invoke(context, event)
+
+    def draw(self, _context):
+        self.layout.prop(self, "outer_layers_3d", icon="MOD_SOLIDIFY")
 
     def execute(self, context):
         context.scene.mi_bridge.project_path = self.filepath
+        context.scene.mi_bridge.outer_layers_3d = self.outer_layers_3d
         return bpy.ops.mibridge.import_scene()
 
 
@@ -347,6 +366,9 @@ def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings) -
         row = categories.row()
         row.enabled = not (prop == "import_environment" and settings.mineimator_suite)
         row.prop(settings, prop)
+    outer = categories.row()
+    outer.enabled = settings.import_characters
+    outer.prop(settings, "outer_layers_3d", icon="MOD_SOLIDIFY")
     layout.prop(settings, "use_mcprep")
     layout.prop(settings, "honor_item_keyframe_changes")
     layout.prop(settings, "remove_startup_cube")

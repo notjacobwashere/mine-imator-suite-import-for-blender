@@ -69,6 +69,7 @@ class ImportOptions:
     honor_item_keyframe_changes: bool = False
     remove_startup_cube: bool = True
     mineimator_suite: bool = True
+    outer_layers_3d: bool = False
 
 
 @dataclass
@@ -680,15 +681,140 @@ def _create_model_shape(name: str, shape: dict[str, Any], texture_size: tuple[fl
     return obj
 
 
-def _build_mimodel(model: dict[str, Any], model_path: Path | None, root: bpy.types.Object, collection: bpy.types.Collection, project: core.ProjectIndex, assets: core.AssetStore | None, texture_override: Path | None, report: ImportReport) -> dict[str, list[bpy.types.Object]]:
+def _voxel_skin_geometry(
+    shape: dict[str, Any],
+    texture_size: tuple[float, float],
+    image: bpy.types.Image,
+) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]], list[tuple[float, float]], int]:
+    """Turn the visible texels of an inflated player layer into a 3D shell.
+
+    Each visible surface texel keeps its exact front UV. Boundary edges extend
+    inward to the uninflated player body, giving transparent gaps real depth
+    without creating hidden faces between adjacent texels.
+    """
+    box_vertices, box_faces, box_uvs = _box_geometry(shape, texture_size)
+    image_width, image_height = image.size
+    if image_width < 1 or image_height < 1:
+        raise ValueError("player skin texture has no pixels")
+    pixels = list(image.pixels[:])
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, int, int, int]] = []
+    uvs: list[tuple[float, float]] = []
+    visible_pixels = 0
+    center = sum((Vector(value) for value in box_vertices), Vector()) / len(box_vertices)
+    depth = max(float(shape.get("inflate", 0.0)) / core.MI_UNITS_PER_BLOCK, 1e-5)
+    tex_w, tex_h = texture_size
+
+    def bilerp(values, x: float, y: float):
+        low = values[0].lerp(values[1], x)
+        high = values[3].lerp(values[2], x)
+        return low.lerp(high, y)
+
+    def is_visible(uv: Vector) -> bool:
+        # Blender image buffers and the bridge's UVs both use a bottom-left
+        # origin. Clamp exact 1.0 coordinates back onto the last texel.
+        x = min(image_width - 1, max(0, int(math.floor(float(uv.x) * image_width))))
+        y = min(image_height - 1, max(0, int(math.floor(float(uv.y) * image_height))))
+        return pixels[(y * image_width + x) * 4 + 3] > (1.0 / 255.0)
+
+    def add_quad(points: list[Vector], face_uvs: list[Vector]) -> None:
+        base = len(vertices)
+        vertices.extend(tuple(point) for point in points)
+        faces.append((base, base + 1, base + 2, base + 3))
+        uvs.extend((float(uv.x), float(uv.y)) for uv in face_uvs)
+
+    for face_index, face in enumerate(box_faces):
+        points = [Vector(box_vertices[index]) for index in face]
+        face_uv = [Vector(box_uvs[face_index * 4 + index]) for index in range(4)]
+        edge_u = face_uv[1] - face_uv[0]
+        edge_v = face_uv[3] - face_uv[0]
+        columns = max(1, int(round(max(abs(edge_u.x * tex_w), abs(edge_u.y * tex_h)))))
+        rows = max(1, int(round(max(abs(edge_v.x * tex_w), abs(edge_v.y * tex_h)))))
+        occupancy: set[tuple[int, int]] = set()
+        for column in range(columns):
+            for row in range(rows):
+                sample_uv = bilerp(face_uv, (column + 0.5) / columns, (row + 0.5) / rows)
+                if is_visible(sample_uv):
+                    occupancy.add((column, row))
+
+        face_center = sum(points, Vector()) / 4.0
+        normal = (points[1] - points[0]).cross(points[3] - points[0]).normalized()
+        if normal.dot(face_center - center) < 0.0:
+            normal.negate()
+        inward = normal * depth
+        for column, row in sorted(occupancy, key=lambda value: (value[1], value[0])):
+            x0, x1 = column / columns, (column + 1) / columns
+            y0, y1 = row / rows, (row + 1) / rows
+            front = [
+                bilerp(points, x0, y0),
+                bilerp(points, x1, y0),
+                bilerp(points, x1, y1),
+                bilerp(points, x0, y1),
+            ]
+            front_uv = [
+                bilerp(face_uv, x0, y0),
+                bilerp(face_uv, x1, y0),
+                bilerp(face_uv, x1, y1),
+                bilerp(face_uv, x0, y1),
+            ]
+            back = [point - inward for point in front]
+            sample_uv = bilerp(face_uv, (column + 0.5) / columns, (row + 0.5) / rows)
+            solid_uvs = [sample_uv] * 4
+            add_quad(front, front_uv)
+            if (column - 1, row) not in occupancy:
+                add_quad([front[0], front[3], back[3], back[0]], solid_uvs)
+            if (column + 1, row) not in occupancy:
+                add_quad([front[1], back[1], back[2], front[2]], solid_uvs)
+            if (column, row - 1) not in occupancy:
+                add_quad([front[0], back[0], back[1], front[1]], solid_uvs)
+            if (column, row + 1) not in occupancy:
+                add_quad([front[3], front[2], back[2], back[3]], solid_uvs)
+            visible_pixels += 1
+    return vertices, faces, uvs, visible_pixels
+
+
+def _create_voxel_skin_layer(
+    name: str,
+    shape: dict[str, Any],
+    texture_size: tuple[float, float],
+    texture_path: Path,
+    material: bpy.types.Material,
+    collection: bpy.types.Collection,
+) -> bpy.types.Object:
+    image = bpy.data.images.load(str(texture_path), check_existing=True)
+    vertices, faces, uvs, visible_pixels = _voxel_skin_geometry(shape, texture_size, image)
+    mesh = bpy.data.meshes.new(f"{name} 3D Outer Layer Mesh")
+    mesh.from_pydata(vertices, [], faces)
+    mesh.materials.append(material)
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    for loop, uv in zip(mesh.loops, uvs):
+        uv_layer.data[loop.index].uv = uv
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    collection.objects.link(obj)
+    rotation = _mimodel_rotation_matrix(shape.get("rotation", [0, 0, 0]))
+    location = core.mi_vector(shape.get("position", [0, 0, 0]))
+    scale = list(shape.get("scale", [1, 1, 1]))
+    while len(scale) < 3:
+        scale.append(1)
+    obj.matrix_basis = _transform_matrix(location, rotation, (float(scale[0]), float(scale[2]), float(scale[1])))
+    obj["mi_3d_outer_layer"] = True
+    obj["mi_3d_outer_pixels"] = visible_pixels
+    return obj
+
+
+def _build_mimodel(model: dict[str, Any], model_path: Path | None, root: bpy.types.Object, collection: bpy.types.Collection, project: core.ProjectIndex, assets: core.AssetStore | None, texture_override: Path | None, report: ImportReport, outer_layers_3d: bool = False) -> dict[str, list[bpy.types.Object]]:
     part_map: dict[str, list[bpy.types.Object]] = defaultdict(list)
     base_size = model.get("texture_size", [64, 64])
     if not isinstance(base_size, list) or len(base_size) < 2:
         base_size = [64, 64]
     material_cache: dict[str, bpy.types.Material] = {}
 
+    def texture_path_for(texture: Any) -> Path | None:
+        return texture_override or _resolve_texture(texture, model_path.parent if model_path else None, project, assets)
+
     def material_for(texture: Any, color: Any, alpha: float) -> bpy.types.Material:
-        texture_path = texture_override or _resolve_texture(texture, model_path.parent if model_path else None, project, assets)
+        texture_path = texture_path_for(texture)
         key = f"{texture_path}|{color}|{alpha}"
         if key not in material_cache:
             material_cache[key] = _new_material(f"MI {Path(str(texture_path)).stem if texture_path else 'Color'}", texture_path, _hex_color(color, alpha))
@@ -720,7 +846,22 @@ def _build_mimodel(model: dict[str, Any], model_path: Path | None, root: bpy.typ
                 texture = shape.get("texture", part_texture)
                 shape_size = shape.get("texture_size", part_size)
                 material = material_for(texture, shape.get("color", "#FFFFFF"), alpha)
-                obj = _create_model_shape(shape_name, shape, tuple(shape_size[:2]), material, collection)
+                texture_path = texture_path_for(texture)
+                voxelize = (
+                    outer_layers_3d
+                    and bool(model.get("player_skin"))
+                    and str(shape.get("type", "block")).lower() == "block"
+                    and float(shape.get("inflate", 0.0)) > 0.0
+                    and texture_path is not None
+                )
+                if voxelize:
+                    obj = _create_voxel_skin_layer(shape_name, shape, tuple(shape_size[:2]), texture_path, material, collection)
+                    report.created["3d_outer_layer"] += 1
+                    report.created["3d_outer_pixel"] += int(obj.get("mi_3d_outer_pixels", 0))
+                else:
+                    obj = _create_model_shape(shape_name, shape, tuple(shape_size[:2]), material, collection)
+                    if outer_layers_3d and bool(model.get("player_skin")) and float(shape.get("inflate", 0.0)) > 0.0 and texture_path is None:
+                        report.fallbacks.append(f"{root.name}/{shape_name}: 3D outer layer needs a readable skin texture; kept the flat layer")
                 obj.parent = pivot
                 obj.hide_render = alpha <= 0
                 report.created[f"model_{str(shape.get('type', 'block')).lower()}"] += 1
@@ -1009,6 +1150,7 @@ class SceneImporter:
         self.root_collection["mi_bridge_version"] = core.ADDON_VERSION
         self.root_collection["mi_source_project"] = str(self.project.path)
         self.root_collection["mi_created_in"] = self.project.created_in
+        self.root_collection["mi_3d_outer_layers"] = self.options.outer_layers_3d
         self.report.collection_name = name
         for key, label in CATEGORY_NAMES.items():
             if key in self.options.categories:
@@ -1018,6 +1160,8 @@ class SceneImporter:
 
     def import_scene(self) -> ImportReport:
         self.prepare_assets()
+        if self.options.outer_layers_3d:
+            self.report.notes.append("3D character outer layers: enabled for player-skin hats, jackets, sleeves, and pants")
         if self.options.remove_startup_cube:
             _remove_untouched_startup_cube(self.context, self.report)
         self.create_collections()
@@ -1098,7 +1242,17 @@ class SceneImporter:
         root = _new_empty(label, collection)
         _apply_transform(root, state)
         _metadata(root, self.project, timeline, template, model_path)
-        part_map = _build_mimodel(model, model_path, root, collection, self.project, self.assets, texture, self.report)
+        part_map = _build_mimodel(
+            model,
+            model_path,
+            root,
+            collection,
+            self.project,
+            self.assets,
+            texture,
+            self.report,
+            outer_layers_3d=self.options.outer_layers_3d,
+        )
         for bodypart in self._descendants(str(timeline.get("id"))):
             if str(bodypart.get("type", "")).lower() != "bodypart":
                 continue

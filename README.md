@@ -1,4 +1,4 @@
-# Mine-imator Suite + Import for Blender 0.3.3
+# Mine-imator Suite + Import for Blender 0.3.4
 
 Imports the frame-zero static state of Mine-imator 2.0.2 format-34 projects
 into Blender 5.2. The add-on creates a new uniquely named collection on every
@@ -8,7 +8,7 @@ never creates F-curves or other animation data.
 ## Install and use
 
 1. In Blender, choose **Edit > Preferences > Get Extensions > Install from Disk**.
-2. Select `mineimator_mcprep_bridge-0.3.3.zip` and enable the extension.
+2. Select `mineimator_mcprep_bridge-0.3.4.zip` and enable the extension.
 3. Open **File > Import > Mine-imator Project**, or the **MI Bridge** tab in the
    3D View sidebar.
 4. Select a `.miproject` file (or paste a directory containing exactly one),
@@ -71,6 +71,15 @@ the current frame and restores the scene's original render settings afterward.
   basis in the correct order. Meshcache worlds now retain the saved position
   and orientation instead of rotating around a crop corner and exposing the
   selection walls or ceiling near the scene.
+
+## 0.3.4 3D character outer layers
+
+- Adds an optional **3D character outer layers** import setting. It converts
+  opaque pixels in player hats, jackets, sleeves, and pants into editable 3D
+  surface geometry, with real depth around transparent gaps and silhouette
+  edges.
+- The setting is disabled by default and affects player-skin models only;
+  custom models and entity shells keep their authored Mine-imator geometry.
 
 The **Use frame-0 item swaps** option is disabled by default because some
 Mine-imator projects contain stale `ITEM_NAME` compatibility hints. Enable the
