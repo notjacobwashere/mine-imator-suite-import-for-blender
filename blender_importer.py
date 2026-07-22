@@ -16,7 +16,7 @@ import bpy
 import bmesh
 from mathutils import Matrix, Vector
 
-from . import core
+from . import core, meshcache
 
 
 CATEGORY_NAMES = {
@@ -276,6 +276,236 @@ def _new_material(name: str, image_path: Path | None = None, color: tuple[float,
         material.use_transparency_overlap = False
     material["mi_pixel_art"] = True
     return material
+
+
+def _meshcache_atlas(assets: core.AssetStore, *, animated: bool) -> bpy.types.Image:
+    """Build Mine-imator's exact 32-column block sheet inside Blender.
+
+    Meshcache UVs point into this generated sheet rather than individual block
+    textures. Mine-imator's metadata supplies the ordering, so the result also
+    works when a future asset pack changes that order.
+    """
+    import numpy as np
+
+    role = "animated" if animated else "static"
+    image_name = f"MI {assets.asset_version} Block Atlas ({role})"
+    existing = bpy.data.images.get(image_name)
+    if existing and existing.get("mi_asset_zip") == str(assets.zip_path):
+        return existing
+    atlas_path = assets.extract_root / "bridge_generated" / f"block_atlas_{role}.png"
+    if atlas_path.is_file():
+        atlas = bpy.data.images.load(str(atlas_path), check_existing=True)
+        atlas.name = image_name
+        atlas.colorspace_settings.name = "sRGB"
+        atlas.alpha_mode = "STRAIGHT"
+        atlas["mi_bridge_version"] = core.ADDON_VERSION
+        atlas["mi_asset_zip"] = str(assets.zip_path)
+        atlas["mi_source_setting"] = f"block_texture_atlas_{role}"
+        return atlas
+
+    names = assets.metadata.get("block_textures_animated" if animated else "block_textures", [])
+    if not isinstance(names, list):
+        raise RuntimeError(f"Mine-imator asset metadata has no {role} block texture list")
+    sheet_width = 32
+    sheet_height = 2 if animated else 32
+    tile_size = 16
+    pixels = np.zeros((sheet_height * tile_size, sheet_width * tile_size, 4), dtype=np.float32)
+    for slot, raw_name in enumerate(names[:sheet_width * sheet_height]):
+        clean_name = str(raw_name).replace(" opaque", "").replace(" noalpha", "")
+        path = assets.materialize(f"textures/{clean_name}.png")
+        if not path:
+            continue
+        source = bpy.data.images.load(str(path), check_existing=False)
+        try:
+            width, height = source.size
+            if width != tile_size or height < tile_size:
+                continue
+            # Blender defers decoding file-backed image pixels. Touching one
+            # value ensures foreach_get sees decoded data instead of zeros.
+            _ = source.pixels[0]
+            values = np.empty(width * height * 4, dtype=np.float32)
+            source.pixels.foreach_get(values)
+            source_pixels = values.reshape((height, width, 4))
+            # Minecraft animated strips put frame zero at the top of the PNG.
+            tile = source_pixels[height - tile_size:height, :tile_size, :]
+            x = (slot % sheet_width) * tile_size
+            y = (slot // sheet_width) * tile_size
+            pixels[y:y + tile_size, x:x + tile_size, :] = tile
+        finally:
+            bpy.data.images.remove(source)
+
+    atlas = bpy.data.images.new(f"{image_name} (building)", width=sheet_width * tile_size, height=sheet_height * tile_size, alpha=True)
+    atlas.colorspace_settings.name = "sRGB"
+    atlas.alpha_mode = "STRAIGHT"
+    # Image settings trigger an internal reset in Blender 5.2, so write pixels
+    # only after all settings and metadata are assigned.
+    atlas.pixels[:] = pixels.ravel()
+    atlas_path.parent.mkdir(parents=True, exist_ok=True)
+    atlas.filepath_raw = str(atlas_path)
+    atlas.file_format = "PNG"
+    atlas.save()
+    bpy.data.images.remove(atlas)
+    atlas = bpy.data.images.load(str(atlas_path), check_existing=True)
+    atlas.name = image_name
+    atlas.colorspace_settings.name = "sRGB"
+    atlas.alpha_mode = "STRAIGHT"
+    atlas["mi_bridge_version"] = core.ADDON_VERSION
+    atlas["mi_asset_zip"] = str(assets.zip_path)
+    atlas["mi_source_setting"] = f"block_texture_atlas_{role}"
+    return atlas
+
+
+_MESHCACHE_TINT_DEFAULTS = {
+    "normal": (1.0, 1.0, 1.0, 1.0),
+    "animated": (1.0, 1.0, 1.0, 1.0),
+    "grass": (0.5686, 0.7412, 0.3490, 1.0),
+    "foliage": (0.4667, 0.6706, 0.1843, 1.0),
+    "leaves_oak": (0.4667, 0.6706, 0.1843, 1.0),
+    "leaves_spruce": (0.3843, 0.6588, 0.3412, 1.0),
+    "leaves_birch": (0.3843, 0.6588, 0.3412, 1.0),
+    "leaves_jungle": (0.4667, 0.6706, 0.1843, 1.0),
+    "leaves_acacia": (0.4667, 0.6706, 0.1843, 1.0),
+    "leaves_dark_oak": (0.4667, 0.6706, 0.1843, 1.0),
+    "leaves_mangrove": (0.4667, 0.6706, 0.1843, 1.0),
+    "water": (0.2431, 0.4588, 0.8824, 0.72),
+}
+
+
+def _meshcache_material(name: str, image: bpy.types.Image, depth: int, role: str) -> bpy.types.Material:
+    material = bpy.data.materials.new(name)
+    material.use_nodes = True
+    material.diffuse_color = _MESHCACHE_TINT_DEFAULTS[role]
+    material["mi_pixel_art"] = True
+    material["mi_meshcache_tint_role"] = role
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+    nodes.clear()
+    output = nodes.new("ShaderNodeOutputMaterial")
+    principled = nodes.new("ShaderNodeBsdfPrincipled")
+    principled.name = "MI Meshcache Shader"
+    principled.inputs["Roughness"].default_value = 0.9 if role != "water" else 0.12
+    texture = nodes.new("ShaderNodeTexImage")
+    texture.name = "MI Block Atlas"
+    texture.image = image
+    texture.interpolation = "Closest"
+    texture.extension = "CLIP"
+    tint = nodes.new("ShaderNodeRGB")
+    tint.name = "MI Tint"
+    tint.outputs[0].default_value = _MESHCACHE_TINT_DEFAULTS[role]
+    multiply = nodes.new("ShaderNodeMixRGB")
+    multiply.name = "MI Texture Tint"
+    multiply.blend_type = "MULTIPLY"
+    multiply.inputs[0].default_value = 1.0
+    links.new(texture.outputs["Color"], multiply.inputs[1])
+    links.new(tint.outputs[0], multiply.inputs[2])
+    links.new(multiply.outputs[0], principled.inputs["Base Color"])
+    if depth > 0:
+        if role == "water":
+            alpha = nodes.new("ShaderNodeMath")
+            alpha.operation = "MULTIPLY"
+            alpha.inputs[1].default_value = _MESHCACHE_TINT_DEFAULTS[role][3]
+            links.new(texture.outputs["Alpha"], alpha.inputs[0])
+            links.new(alpha.outputs[0], principled.inputs["Alpha"])
+            principled.inputs["Metallic"].default_value = 0.0
+            principled.inputs["IOR"].default_value = 1.333
+        else:
+            links.new(texture.outputs["Alpha"], principled.inputs["Alpha"])
+        if hasattr(material, "surface_render_method"):
+            material.surface_render_method = "DITHERED"
+        if hasattr(material, "use_transparency_overlap"):
+            material.use_transparency_overlap = False
+    links.new(principled.outputs[0], output.inputs["Surface"])
+    return material
+
+
+def _meshcache_object(raw: meshcache.RawMesh, name: str, material: bpy.types.Material, collection: bpy.types.Collection) -> bpy.types.Object:
+    """Convert one native Mine-imator VertexBuffer mesh with bulk Blender APIs."""
+    import numpy as np
+
+    vertex_dtype = np.dtype([
+        ("co", "<f4", (3,)),
+        ("normal", "<u4"),
+        ("color", "<u4"),
+        ("uv", "<f4", (2,)),
+        ("data", "<u4"),
+        ("tangent", "<u4"),
+    ])
+    vertices = np.frombuffer(raw.vertices, dtype=vertex_dtype, count=raw.vertex_count)
+    indices = np.frombuffer(raw.indices, dtype="<u4", count=raw.index_count)
+    coordinates = np.empty((raw.vertex_count, 3), dtype=np.float32)
+    coordinates[:, 0] = vertices["co"][:, 0] / core.MI_UNITS_PER_BLOCK
+    coordinates[:, 1] = -vertices["co"][:, 1] / core.MI_UNITS_PER_BLOCK
+    coordinates[:, 2] = vertices["co"][:, 2] / core.MI_UNITS_PER_BLOCK
+
+    mesh = bpy.data.meshes.new(f"{name} Mesh")
+    mesh.vertices.add(raw.vertex_count)
+    mesh.vertices.foreach_set("co", coordinates.ravel())
+    mesh.loops.add(raw.index_count)
+    mesh.loops.foreach_set("vertex_index", indices)
+    polygon_count = raw.index_count // 3
+    mesh.polygons.add(polygon_count)
+    mesh.polygons.foreach_set("loop_start", np.arange(0, raw.index_count, 3, dtype=np.int32))
+    mesh.polygons.foreach_set("loop_total", np.full(polygon_count, 3, dtype=np.int32))
+    uv_layer = mesh.uv_layers.new(name="UVMap")
+    loop_uv = np.ascontiguousarray(vertices["uv"][indices], dtype=np.float32)
+    uv_layer.data.foreach_set("uv", loop_uv.ravel())
+    mesh.materials.append(material)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    collection.objects.link(obj)
+    obj["mi_meshcache_depth"] = raw.depth
+    obj["mi_meshcache_buffer"] = raw.buffer_name
+    return obj
+
+
+def _import_meshcache_world(
+    cache_path: Path,
+    name: str,
+    timeline: dict[str, Any],
+    template: dict[str, Any] | None,
+    collection: bpy.types.Collection,
+    project: core.ProjectIndex,
+    assets: core.AssetStore,
+    report: ImportReport,
+) -> bpy.types.Object:
+    header = meshcache.read_header(cache_path)
+    root = _new_empty(name, collection)
+    _apply_transform(root, core.frame0_state(timeline))
+    _metadata(root, project, timeline, template, cache_path)
+    root["mi_meshcache_format"] = header.format
+    root["mi_meshcache_size"] = list(header.size)
+
+    static_atlas = _meshcache_atlas(assets, animated=False)
+    animated_atlas = _meshcache_atlas(assets, animated=True)
+    materials: dict[tuple[int, str], bpy.types.Material] = {}
+    imported_vertices = imported_triangles = 0
+    for raw in meshcache.iter_raw_meshes(cache_path):
+        if not raw.vertex_count or not raw.index_count:
+            continue
+        role = raw.buffer_name
+        key = (raw.depth, role)
+        if key not in materials:
+            atlas = animated_atlas if role in {"animated", "water"} else static_atlas
+            materials[key] = _meshcache_material(
+                f"MI World {role.replace('_', ' ').title()} D{raw.depth}", atlas, raw.depth, role
+            )
+            materials[key]["mi_source_project"] = str(project.path)
+            materials[key]["mi_bridge_version"] = core.ADDON_VERSION
+            materials[key]["mi_suite_id"] = report.collection_name
+        object_name = f"{name} - {role.replace('_', ' ').title()} {raw.mesh_index + 1}"
+        obj = _meshcache_object(raw, object_name, materials[key], collection)
+        obj.parent = root
+        _metadata(obj, project, timeline, template, cache_path)
+        imported_vertices += raw.vertex_count
+        imported_triangles += raw.index_count // 3
+        report.created["scenery_mesh"] += 1
+
+    report.fallbacks.append(f"World scenery recovered from Mine-imator meshcache: {cache_path}")
+    report.notes.append(
+        f"Meshcache world: {header.size[0]} x {header.size[1]} x {header.size[2]} blocks, "
+        f"{imported_vertices:,} vertices, {imported_triangles:,} triangles"
+    )
+    return root
 
 
 def _placeholder(name: str, message: str, collection: bpy.types.Collection, project: core.ProjectIndex, timeline: dict[str, Any], report: ImportReport) -> bpy.types.Object:
@@ -1001,19 +1231,34 @@ class SceneImporter:
             self.report.notes.append(f"{root.name}: empty scenery slot contains no visible world geometry")
             self.report.created["empty_scenery"] += 1
             return root
-        mineways = core.find_mineways(self.options.mineways_path)
-        if not mineways:
-            bounds = core.world_bounds({"start": resource.get("world_box_start"), "end": resource.get("world_box_end")})
-            details = "Mineways is not configured"
-            if bounds:
-                details += f"; export X/Y/Z {bounds[0]} to {bounds[1]} from {resource.get('world_regions_dir', '')}"
-            return _placeholder(timeline.get("name") or resource.get("filename") or "World Scenery", details, collection, self.project, timeline, self.report)
         raw_bounds = {"start": resource.get("world_box_start"), "end": resource.get("world_box_end")}
         bounds = core.world_bounds(raw_bounds)
         region_dir = Path(str(resource.get("world_regions_dir", "")))
         world_dir = region_dir.parent
+        cache_path = meshcache.discover(self.project.path, str(resource.get("filename", "")))
+        world_name = timeline.get("name") or resource.get("filename") or "World Scenery"
+        mineways = core.find_mineways(self.options.mineways_path)
+        if (not mineways or not bounds or not region_dir.is_dir() or not world_dir.is_dir()) and cache_path and self.assets:
+            return _import_meshcache_world(
+                cache_path,
+                world_name,
+                timeline,
+                template,
+                collection,
+                self.project,
+                self.assets,
+                self.report,
+            )
+        if not mineways:
+            details = "Mineways is not configured and no matching Mine-imator meshcache was found"
+            if bounds:
+                details += f"; export X/Y/Z {bounds[0]} to {bounds[1]} from {resource.get('world_regions_dir', '')}"
+            return _placeholder(world_name, details, collection, self.project, timeline, self.report)
         if not bounds or not region_dir.is_dir() or not world_dir.is_dir():
-            return _placeholder(timeline.get("name") or "World Scenery", "saved world path or crop is invalid", collection, self.project, timeline, self.report)
+            details = "saved world path or crop is invalid and no matching Mine-imator meshcache was found"
+            if cache_path and not self.assets:
+                details = f"meshcache found at {cache_path}, but the matching Mine-imator asset pack is unavailable"
+            return _placeholder(world_name, details, collection, self.project, timeline, self.report)
         export_dir = Path(tempfile.gettempdir()) / "mineimator_mcprep_bridge" / "mineways"
         export_dir.mkdir(parents=True, exist_ok=True)
         stem = core.safe_filename(f"{self.project.path.stem}-{timeline.get('id', 'scenery')}")

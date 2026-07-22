@@ -106,7 +106,14 @@ def _box_mesh(name: str) -> bpy.types.Mesh:
     return mesh
 
 
-def _surface_material(name: str, image: bpy.types.Image | None, tint: tuple[float, float, float, float], *, emission: bool = False) -> bpy.types.Material:
+def _surface_material(
+    name: str,
+    image: bpy.types.Image | None,
+    tint: tuple[float, float, float, float],
+    *,
+    emission: bool = False,
+    black_key: bool = False,
+) -> bpy.types.Material:
     material = bpy.data.materials.new(name)
     material.use_nodes = True
     nodes = material.node_tree.nodes
@@ -151,7 +158,21 @@ def _surface_material(name: str, image: bpy.types.Image | None, tint: tuple[floa
         mix_shader.name = "MI Alpha Mix"
         links.new(transparent.outputs[0], mix_shader.inputs[1])
         links.new(shader.outputs[0], mix_shader.inputs[2])
-        links.new(texture.outputs["Alpha"], mix_shader.inputs[0])
+        alpha_output = texture.outputs["Alpha"]
+        if black_key:
+            # Mine-imator's bundled sun/moon sheets intentionally have opaque
+            # black backgrounds. GameMaker draws black as transparent for
+            # these sprites; reproduce that instead of showing a black quad.
+            luminance = nodes.new("ShaderNodeRGBToBW")
+            luminance.name = "MI Black Key"
+            keyed_alpha = nodes.new("ShaderNodeMath")
+            keyed_alpha.name = "MI Keyed Alpha"
+            keyed_alpha.operation = "MULTIPLY"
+            links.new(texture.outputs["Color"], luminance.inputs["Color"])
+            links.new(luminance.outputs["Val"], keyed_alpha.inputs[0])
+            links.new(texture.outputs["Alpha"], keyed_alpha.inputs[1])
+            alpha_output = keyed_alpha.outputs[0]
+        links.new(alpha_output, mix_shader.inputs[0])
         links.new(mix_shader.outputs[0], output.inputs["Surface"])
     else:
         links.new(shader.outputs[0], output.inputs["Surface"])
@@ -423,13 +444,17 @@ def build_suite(context: bpy.types.Context, parent: bpy.types.Collection, projec
     sun_data = bpy.data.lights.new("Mine-imator Sunlight", "SUN")
     sun_light = _new_object("Mine-imator Sunlight", sun_data, suite, suite_id, "sun_light", str(project.path))
 
-    sun_material = _surface_material("Mine-imator Sun Disc", images["sun"], (1, 1, 1, 1), emission=True)
+    sun_material = _surface_material(
+        "Mine-imator Sun Disc", images["sun"], (1, 1, 1, 1), emission=True, black_key=True
+    )
     _tag(sun_material, suite_id, "sun_material", str(project.path))
     sun_disc = _new_object("Mine-imator Sun", _quad_mesh("Mine-imator Sun Mesh"), suite, suite_id, "sun_disc", str(project.path))
     sun_disc.data.materials.append(sun_material)
     sun_disc.parent = sky_root
 
-    moon_material = _surface_material("Mine-imator Moon Disc", images["moon"], (1, 1, 1, 1), emission=True)
+    moon_material = _surface_material(
+        "Mine-imator Moon Disc", images["moon"], (1, 1, 1, 1), emission=True, black_key=True
+    )
     _tag(moon_material, suite_id, "moon_material", str(project.path))
     moon_disc = _new_object("Mine-imator Moon", _quad_mesh("Mine-imator Moon Mesh", core.moon_phase_uv(int(state["sky_moon_phase"]))), suite, suite_id, "moon_disc", str(project.path))
     moon_disc.data.materials.append(moon_material)
@@ -538,12 +563,34 @@ def apply_environment(scene: bpy.types.Scene) -> None:
     direction = Vector(core.sky_sun_direction(sky_time, env.sky_rotation))
     sun_light = objects.get("sun_light")
     if sun_light and sun_light.type == "LIGHT":
-        sun_light.data.energy = max(0.0, env.sunlight_strength / 100.0) * factors["day"]
-        sun_light.data.color = tuple(env.sunlight_color)[:3]
+        base_sun = tuple(env.sunlight_color)
+        rise_set = max(factors["sunrise"], factors["sunset"])
+        twilight_sun = _mix(base_sun, (1.0, 0.08, 0.015, 1.0), rise_set * 0.75) if env.twilight else base_sun
+        final_sun = _mix(twilight_sun, (0.0, 0.0, 0.0, 1.0), factors["night"])
+        # Eevee does not get Mine-imator's hemispherical ambient fill from its
+        # World background. Compensate shallow solar incidence so dawn/dusk
+        # still illuminate the scene, while direction and shadows continue to
+        # come from the real imported time-of-day angle.
+        solar_elevation = max(0.0, direction.z)
+        incidence = max(0.12, solar_elevation)
+        sun_light.data.energy = min(
+            12.0,
+            max(0.0, env.sunlight_strength / 100.0) * 3.0 * factors["day"] / incidence,
+        )
+        color_peak = max(final_sun[:3])
+        if color_peak > 1e-5:
+            sun_light.data.color = tuple(max(0.0, min(1.0, value / color_peak)) for value in final_sun[:3])
+        else:
+            sun_light.data.color = (0.0, 0.0, 0.0)
         sun_light.data.angle = math.radians(max(0.0, env.sunlight_angle))
+        sun_light.data.use_shadow = True
+        sun_light.data.diffuse_factor = 1.0
+        sun_light.data.specular_factor = 1.0
         sun_light.rotation_mode = "QUATERNION"
         sun_light.rotation_quaternion = (-direction).to_track_quat("-Z", "Y")
+        sun_light.location = direction * 50.0
         sun_light["mi_sun_direction"] = list(direction)
+        sun_light["mi_time_driven_energy"] = sun_light.data.energy
     for role, radial, size, angle in (
         ("sun_disc", direction, env.sun_size, env.sun_angle),
         ("moon_disc", -direction, env.moon_size, env.moon_angle),
@@ -564,6 +611,28 @@ def apply_environment(scene: bpy.types.Scene) -> None:
     if objects.get("moon_disc") and objects["moon_disc"].data.materials:
         _set_material_image(objects["moon_disc"].data.materials[0], env.moon_texture, env.suite_id, "moon")
     _set_moon_uv(objects.get("moon_disc"), int(env.moon_phase))
+
+    meshcache_colors = {
+        "grass": tuple(env.grass_color),
+        "foliage": tuple(env.foliage_color),
+        "leaves_oak": tuple(env.leaves_oak_color),
+        "leaves_spruce": tuple(env.leaves_spruce_color),
+        "leaves_birch": tuple(env.leaves_birch_color),
+        "leaves_jungle": tuple(env.leaves_jungle_color),
+        "leaves_acacia": tuple(env.leaves_acacia_color),
+        "leaves_dark_oak": tuple(env.leaves_dark_oak_color),
+        "leaves_mangrove": tuple(env.leaves_mangrove_color),
+        "water": tuple(env.water_color),
+    }
+    for material in bpy.data.materials:
+        role = material.get("mi_meshcache_tint_role")
+        if material.get("mi_suite_id") != env.suite_id or role not in meshcache_colors:
+            continue
+        color = meshcache_colors[role]
+        tint_node = material.node_tree.nodes.get("MI Tint") if material.use_nodes else None
+        if tint_node:
+            tint_node.outputs[0].default_value = color
+        material.diffuse_color = color
 
     stars = objects.get("stars")
     if stars:

@@ -50,6 +50,21 @@ the current frame and restores the scene's original render settings afterward.
 - Adopts the public name **Mine-imator Suite + Import for Blender** while
   retaining the stable extension ID for seamless upgrades.
 
+## 0.3.2 Scenery cache and sunlight fixes
+
+- Recovers world scenery directly from Mine-imator format-2 `.meshcache`
+  files when the original Minecraft save path is missing or Mineways is not
+  available. Matching caches can be discovered in sibling Mine-imator project
+  folders after a project is duplicated with Save As.
+- Rebuilds Mine-imator's exact static and animated block atlases from the
+  installed Minecraft asset pack, including transparent blocks, biome-tinted
+  grass and leaves, and water.
+- Keys the bundled sun and moon textures' opaque black backgrounds to
+  transparency.
+- Calibrates the real Blender Sun from Mine-imator's time-of-day direction,
+  twilight color, horizon fade, strength, shadow angle, and shallow-incidence
+  compensation so dawn and dusk still cast useful directional light.
+
 The **Use frame-0 item swaps** option is disabled by default because some
 Mine-imator projects contain stale `ITEM_NAME` compatibility hints. Enable the
 option only when the frame-0 swap is known to be intentional.
