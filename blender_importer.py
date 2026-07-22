@@ -477,6 +477,21 @@ def _import_meshcache_world(
 
     static_atlas = _meshcache_atlas(assets, animated=False)
     animated_atlas = _meshcache_atlas(assets, animated=True)
+    # Mine-imator first subtracts the template's automatic scenery pivot
+    # (half of the crop in X/Y), then renders the cached vertices through
+    # render_world_block's legacy basis. In engine space that basis is
+    # (x, y, z) -> (y, -x + sizeY, z). Reflecting engine Y into Blender Y
+    # produces the matrices below. Both stages are required: omitting the
+    # pivot rotates the crop around a corner and leaves its terrain hundreds
+    # of blocks away from the camera.
+    legacy_basis = (
+        Matrix.Translation((0.0, -float(header.size[1]), 0.0))
+        @ Matrix.Rotation(math.radians(90.0), 4, "Z")
+    )
+    automatic_pivot = Matrix.Translation(
+        (-float(header.size[0]) / 2.0, float(header.size[1]) / 2.0, 0.0)
+    )
+    scenery_basis = automatic_pivot @ legacy_basis
     materials: dict[tuple[int, str], bpy.types.Material] = {}
     imported_vertices = imported_triangles = 0
     for raw in meshcache.iter_raw_meshes(cache_path):
@@ -495,6 +510,7 @@ def _import_meshcache_world(
         object_name = f"{name} - {role.replace('_', ' ').title()} {raw.mesh_index + 1}"
         obj = _meshcache_object(raw, object_name, materials[key], collection)
         obj.parent = root
+        obj.matrix_basis = scenery_basis
         _metadata(obj, project, timeline, template, cache_path)
         imported_vertices += raw.vertex_count
         imported_triangles += raw.index_count // 3

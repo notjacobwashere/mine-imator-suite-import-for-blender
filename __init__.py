@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator Suite + Import for Blender",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 3, 2),
+    "version": (0, 3, 3),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import Mine-imator scenes, assets, and environments for Blender and MCprep",

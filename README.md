@@ -1,4 +1,4 @@
-# Mine-imator Suite + Import for Blender 0.3.1
+# Mine-imator Suite + Import for Blender 0.3.3
 
 Imports the frame-zero static state of Mine-imator 2.0.2 format-34 projects
 into Blender 5.2. The add-on creates a new uniquely named collection on every
@@ -8,7 +8,7 @@ never creates F-curves or other animation data.
 ## Install and use
 
 1. In Blender, choose **Edit > Preferences > Get Extensions > Install from Disk**.
-2. Select `mineimator_mcprep_bridge-0.3.1.zip` and enable the extension.
+2. Select `mineimator_mcprep_bridge-0.3.3.zip` and enable the extension.
 3. Open **File > Import > Mine-imator Project**, or the **MI Bridge** tab in the
    3D View sidebar.
 4. Select a `.miproject` file (or paste a directory containing exactly one),
@@ -64,6 +64,13 @@ the current frame and restores the scene's original render settings afterward.
 - Calibrates the real Blender Sun from Mine-imator's time-of-day direction,
   twilight color, horizon fade, strength, shadow angle, and shallow-incidence
   compensation so dawn and dusk still cast useful directional light.
+
+## 0.3.3 Scenery placement fix
+
+- Reproduces Mine-imator's automatic center pivot and legacy 90-degree cache
+  basis in the correct order. Meshcache worlds now retain the saved position
+  and orientation instead of rotating around a crop corner and exposing the
+  selection walls or ceiling near the scene.
 
 The **Use frame-0 item swaps** option is disabled by default because some
 Mine-imator projects contain stale `ITEM_NAME` compatibility hints. Enable the
