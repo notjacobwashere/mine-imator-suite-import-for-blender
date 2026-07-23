@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator Suite + Import for Blender",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 3, 4),
+    "version": (0, 3, 5),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import Mine-imator scenes, assets, and environments for Blender and MCprep",
@@ -183,7 +183,7 @@ class MIBRIDGE_PG_settings(PropertyGroup):
     import_characters: BoolProperty(name="Characters and entities", default=True)
     outer_layers_3d: BoolProperty(
         name="3D character outer layers",
-        description="Turn opaque player-skin hat, jacket, sleeve, and pants pixels into real 3D geometry",
+        description="On the next import, turn player-skin hat, jacket, sleeve, and pants pixels into one-texel-deep 3D geometry",
         default=False,
     )
     import_items: BoolProperty(name="Items", default=True)
@@ -300,6 +300,8 @@ class MIBRIDGE_OT_import_scene(Operator):
             f"Placeholders: {len(report.placeholders)}; missing: {len(report.missing)}",
             "Full details: Text Editor > Mine-imator Bridge Report",
         ]
+        if settings.outer_layers_3d:
+            summary.insert(2, f"3D outer layers: {report.created['3d_outer_layer']} parts")
         _popup(context, "Mine-imator import complete", summary, "CHECKMARK")
         self.report({"INFO"}, summary[0])
         return {"FINISHED"}
@@ -314,7 +316,7 @@ class MIBRIDGE_OT_import_file(Operator, ImportHelper):
     filter_glob: StringProperty(default="*.miproject", options={"HIDDEN"})
     outer_layers_3d: BoolProperty(
         name="3D character outer layers",
-        description="Turn opaque player-skin hat, jacket, sleeve, and pants pixels into real 3D geometry",
+        description="Turn player-skin hat, jacket, sleeve, and pants pixels into one-texel-deep 3D geometry during this import",
         default=False,
     )
 
@@ -345,7 +347,22 @@ class MIBRIDGE_OT_reload_environment(Operator):
         return {"FINISHED"}
 
 
-def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings) -> None:
+class MIBRIDGE_OT_apply_environment(Operator):
+    bl_idname = "mibridge.apply_environment"
+    bl_label = "Apply Current Values"
+    bl_description = "Force the active Mine-imator World and environment objects to refresh from the sidebar values"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        if not context.scene.mi_environment.active:
+            self.report({"ERROR"}, "No active Mine-imator Suite environment")
+            return {"CANCELLED"}
+        suite_environment.apply_environment(context.scene)
+        self.report({"INFO"}, "Applied Mine-imator environment values")
+        return {"FINISHED"}
+
+
+def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings, context: bpy.types.Context) -> None:
     layout.prop(settings, "project_path")
     suite = layout.box()
     suite.prop(settings, "mineimator_suite", icon="WORLD")
@@ -369,6 +386,14 @@ def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings) -
     outer = categories.row()
     outer.enabled = settings.import_characters
     outer.prop(settings, "outer_layers_3d", icon="MOD_SOLIDIFY")
+    if settings.outer_layers_3d:
+        latest_name = str(context.scene.get("mi_bridge_last_import_collection", ""))
+        latest = bpy.data.collections.get(latest_name)
+        if latest and latest.get("mi_3d_outer_layers"):
+            count = int(context.scene.get("mi_bridge_last_3d_outer_layer_count", 0))
+            categories.label(text=f"Last import: {count} voxel-layer parts", icon="CHECKMARK")
+        else:
+            categories.label(text="Import Scene again to apply this setting", icon="INFO")
     layout.prop(settings, "use_mcprep")
     layout.prop(settings, "honor_item_keyframe_changes")
     layout.prop(settings, "remove_startup_cube")
@@ -385,7 +410,7 @@ class MIBRIDGE_PT_panel(Panel):
     bl_category = "MI Bridge"
 
     def draw(self, context):
-        _draw_settings(self.layout, context.scene.mi_bridge)
+        _draw_settings(self.layout, context.scene.mi_bridge, context)
 
 
 class MIBRIDGE_PT_environment(Panel):
@@ -404,9 +429,11 @@ class MIBRIDGE_PT_environment(Panel):
         layout = self.layout
         layout.label(text=f"Active: {env.suite_id}", icon="WORLD")
         row = layout.row(align=True)
-        row.prop(env, "time_hours", slider=True)
-        row.prop(env, "sky_rotation")
-        layout.operator("mibridge.reload_environment", icon="FILE_REFRESH")
+        row.prop(env, "time_hours", text="Time of day", slider=True)
+        row.prop(env, "sky_rotation", text="Sky rotation")
+        controls = layout.row(align=True)
+        controls.operator("mibridge.apply_environment", icon="CHECKMARK")
+        controls.operator("mibridge.reload_environment", icon="FILE_REFRESH", text="Reload Imported")
 
 
 class MIBRIDGE_PT_environment_sunlight(Panel):
@@ -419,8 +446,9 @@ class MIBRIDGE_PT_environment_sunlight(Panel):
 
     def draw(self, context):
         env = context.scene.mi_environment
-        self.layout.prop(env, "sunlight_angle")
-        self.layout.prop(env, "sunlight_strength")
+        self.layout.label(text="Position: Time of day + Sky rotation above", icon="INFO")
+        self.layout.prop(env, "sunlight_angle", text="Shadow softness")
+        self.layout.prop(env, "sunlight_strength", text="Directional strength")
         self.layout.prop(env, "sunlight_color")
 
 
@@ -445,7 +473,7 @@ class MIBRIDGE_PT_environment_sky(Panel):
         layout.separator()
         layout.prop(env, "sun_texture")
         row = layout.row(align=True)
-        row.prop(env, "sun_angle")
+        row.prop(env, "sun_angle", text="Texture rotation")
         row.prop(env, "sun_size")
         layout.prop(env, "moon_texture")
         layout.prop(env, "moon_phase")
@@ -577,6 +605,7 @@ CLASSES = (
     MIBRIDGE_OT_import_scene,
     MIBRIDGE_OT_import_file,
     MIBRIDGE_OT_reload_environment,
+    MIBRIDGE_OT_apply_environment,
     MIBRIDGE_PT_panel,
     MIBRIDGE_PT_environment,
     MIBRIDGE_PT_environment_sunlight,

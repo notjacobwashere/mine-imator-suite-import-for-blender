@@ -1,4 +1,4 @@
-# Mine-imator Suite + Import for Blender 0.3.4
+# Mine-imator Suite + Import for Blender 0.3.5
 
 Imports the frame-zero static state of Mine-imator 2.0.2 format-34 projects
 into Blender 5.2. The add-on creates a new uniquely named collection on every
@@ -8,7 +8,7 @@ never creates F-curves or other animation data.
 ## Install and use
 
 1. In Blender, choose **Edit > Preferences > Get Extensions > Install from Disk**.
-2. Select `mineimator_mcprep_bridge-0.3.4.zip` and enable the extension.
+2. Select `mineimator_mcprep_bridge-0.3.5.zip` and enable the extension.
 3. Open **File > Import > Mine-imator Project**, or the **MI Bridge** tab in the
    3D View sidebar.
 4. Select a `.miproject` file (or paste a directory containing exactly one),
@@ -80,6 +80,21 @@ the current frame and restores the scene's original render settings afterward.
   edges.
 - The setting is disabled by default and affects player-skin models only;
   custom models and entity shells keep their authored Mine-imator geometry.
+
+## 0.3.5 Live environment and visible voxel depth
+
+- Gives 3D player outer-layer pixels a full texel of depth, matching the
+  silhouette thickness of the 3D Skin Layers style and remaining visible at
+  ordinary camera distances.
+- Makes directional sunlight strength linear and visibly responsive while
+  retaining the time-of-day fade at sunrise, sunset, and night.
+- Clarifies that **Time of day** and **Sky rotation** position the sun, while
+  **Shadow softness** controls the Blender Sun's angular diameter and the Sun
+  texture rotation only spins the visible disc.
+- Adds **Apply Current Values** to force-refresh the active World and Sun, plus
+  an import-status message showing how many voxel-layer parts were generated.
+- Respects Mine-imator's saved ground visibility. Projects with ground disabled
+  now create the editable suite ground hidden instead of forcing it visible.
 
 The **Use frame-0 item swaps** option is disabled by default because some
 Mine-imator projects contain stale `ITEM_NAME` compatibility hints. Enable the

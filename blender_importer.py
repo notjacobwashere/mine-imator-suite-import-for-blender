@@ -702,7 +702,11 @@ def _voxel_skin_geometry(
     uvs: list[tuple[float, float]] = []
     visible_pixels = 0
     center = sum((Vector(value) for value in box_vertices), Vector()) / len(box_vertices)
-    depth = max(float(shape.get("inflate", 0.0)) / core.MI_UNITS_PER_BLOCK, 1e-5)
+    # 3D Skin Layers uses one full model texel of depth for each surface
+    # voxel. Mine-imator's ordinary outer shell is only 0.25-0.5 texels away
+    # from the base body, which made the first bridge implementation almost
+    # indistinguishable at normal camera distances.
+    depth = 1.0 / core.MI_UNITS_PER_BLOCK
     tex_w, tex_h = texture_size
 
     def bilerp(values, x: float, y: float):
@@ -1151,6 +1155,7 @@ class SceneImporter:
         self.root_collection["mi_source_project"] = str(self.project.path)
         self.root_collection["mi_created_in"] = self.project.created_in
         self.root_collection["mi_3d_outer_layers"] = self.options.outer_layers_3d
+        self.context.scene["mi_bridge_last_import_collection"] = name
         self.report.collection_name = name
         for key, label in CATEGORY_NAMES.items():
             if key in self.options.categories:
@@ -1190,6 +1195,8 @@ class SceneImporter:
         self._environment()
         self._mcprep_materials()
         self._ensure_static()
+        if self.options.outer_layers_3d:
+            self.context.scene["mi_bridge_last_3d_outer_layer_count"] = int(self.report.created["3d_outer_layer"])
         write_report(self.report)
         return self.report
 

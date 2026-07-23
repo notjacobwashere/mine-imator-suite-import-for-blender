@@ -368,7 +368,7 @@ def _populate_properties(scene: bpy.types.Scene, state: dict[str, Any], *, suite
         env.clouds_height = float(state["sky_clouds_height"])
         env.clouds_size = float(state["sky_clouds_size"])
         env.clouds_thickness = float(state["sky_clouds_thickness"])
-        env.ground_show = True
+        env.ground_show = bool(state["ground_show"])
         env.ground_texture = str(paths.get("ground") or "")
         env.biome = str(state.get("biome", "plains"))
         for key in (
@@ -399,7 +399,7 @@ def _populate_properties(scene: bpy.types.Scene, state: dict[str, Any], *, suite
 
 def build_suite(context: bpy.types.Context, parent: bpy.types.Collection, project: core.ProjectIndex, assets: core.AssetStore | None, report: Any) -> bpy.types.Collection:
     source = core.environment_state(project.data)
-    state = core.environment_state(project.data, force_ground=True)
+    state = core.environment_state(project.data)
     suite_id = report.collection_name
     for collection in bpy.data.collections:
         if collection.get("mi_suite_active"):
@@ -506,7 +506,7 @@ def build_suite(context: bpy.types.Context, parent: bpy.types.Collection, projec
     )
     apply_environment(context.scene)
     report.created.update({"suite": 1, "ground": 1, "sun": 1, "sun_disc": 1, "moon": 1, "clouds": 1, "stars": 1, "fog": 1})
-    report.notes.append("Mine-imator Suite enabled; grass ground forced visible and remains editable")
+    report.notes.append(f"Mine-imator Suite enabled; ground visibility imported as {bool(state['ground_show'])} and remains editable")
     report.notes.append("Wind, cloud speed, and texture-animation speed are preserved as static values; no animation was created")
     report.notes.append("Mineways scenery atlases retain their exported biome colors after sidebar biome changes")
     return suite
@@ -567,16 +567,10 @@ def apply_environment(scene: bpy.types.Scene) -> None:
         rise_set = max(factors["sunrise"], factors["sunset"])
         twilight_sun = _mix(base_sun, (1.0, 0.08, 0.015, 1.0), rise_set * 0.75) if env.twilight else base_sun
         final_sun = _mix(twilight_sun, (0.0, 0.0, 0.0, 1.0), factors["night"])
-        # Eevee does not get Mine-imator's hemispherical ambient fill from its
-        # World background. Compensate shallow solar incidence so dawn/dusk
-        # still illuminate the scene, while direction and shadows continue to
-        # come from the real imported time-of-day angle.
-        solar_elevation = max(0.0, direction.z)
-        incidence = max(0.12, solar_elevation)
-        sun_light.data.energy = min(
-            12.0,
-            max(0.0, env.sunlight_strength / 100.0) * 3.0 * factors["day"] / incidence,
-        )
+        # Keep the control linear and visibly responsive. Time of day still
+        # fades the directional light at the horizon and turns it off at night,
+        # while the user's percentage directly scales the daytime intensity.
+        sun_light.data.energy = max(0.0, env.sunlight_strength / 100.0) * 4.0 * factors["day"]
         color_peak = max(final_sun[:3])
         if color_peak > 1e-5:
             sun_light.data.color = tuple(max(0.0, min(1.0, value / color_peak)) for value in final_sun[:3])
@@ -591,6 +585,8 @@ def apply_environment(scene: bpy.types.Scene) -> None:
         sun_light.location = direction * 50.0
         sun_light["mi_sun_direction"] = list(direction)
         sun_light["mi_time_driven_energy"] = sun_light.data.energy
+        sun_light.data.update_tag()
+        sun_light.update_tag()
     for role, radial, size, angle in (
         ("sun_disc", direction, env.sun_size, env.sun_angle),
         ("moon_disc", -direction, env.moon_size, env.moon_angle),
@@ -690,6 +686,10 @@ def apply_environment(scene: bpy.types.Scene) -> None:
                 volume.inputs["Density"].default_value = min(0.002, 0.02 / fade)
 
     scene["mi_environment_source"] = env.source_json
+    scene["mi_environment_live_update"] = int(scene.get("mi_environment_live_update", 0)) + 1
+    scene.update_tag()
+    if bpy.context.scene == scene:
+        bpy.context.view_layer.update()
 
 
 def reload_environment(scene: bpy.types.Scene) -> bool:
@@ -709,7 +709,7 @@ def reload_environment(scene: bpy.types.Scene) -> bool:
     }
     _populate_properties(
         scene,
-        core.environment_state(source, force_ground=True),
+        core.environment_state(source),
         suite_id=env.suite_id,
         collection_name=env.collection_name,
         world_name=env.world_name,
