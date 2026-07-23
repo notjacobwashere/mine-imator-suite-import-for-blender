@@ -19,7 +19,7 @@ import tempfile
 import zipfile
 
 
-ADDON_VERSION = "0.3.5"
+ADDON_VERSION = "0.3.6"
 SUPPORTED_FORMAT = 34
 MI_UNITS_PER_BLOCK = 16.0
 NULL_IDS = {None, "", "null", "default", -1}

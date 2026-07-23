@@ -1,4 +1,4 @@
-# Mine-imator Suite + Import for Blender 0.3.5
+# Mine-imator Suite + Import for Blender 0.3.6
 
 Imports the frame-zero static state of Mine-imator 2.0.2 format-34 projects
 into Blender 5.2. The add-on creates a new uniquely named collection on every
@@ -8,7 +8,7 @@ never creates F-curves or other animation data.
 ## Install and use
 
 1. In Blender, choose **Edit > Preferences > Get Extensions > Install from Disk**.
-2. Select `mineimator_mcprep_bridge-0.3.5.zip` and enable the extension.
+2. Select `mineimator_mcprep_bridge-0.3.6.zip` and enable the extension.
 3. Open **File > Import > Mine-imator Project**, or the **MI Bridge** tab in the
    3D View sidebar.
 4. Select a `.miproject` file (or paste a directory containing exactly one),
@@ -95,6 +95,14 @@ the current frame and restores the scene's original render settings afterward.
   an import-status message showing how many voxel-layer parts were generated.
 - Respects Mine-imator's saved ground visibility. Projects with ground disabled
   now create the editable suite ground hidden instead of forcing it visible.
+
+## 0.3.6 Persistent 3D-layer default
+
+- Adds a persistent **Default 3D outer layers** preference in both the MI
+  Bridge panel and Blender's extension preferences.
+- The preference controls the starting state for new scenes and File > Import;
+  the existing **3D character outer layers** checkbox remains a per-import
+  override.
 
 The **Use frame-0 item swaps** option is disabled by default because some
 Mine-imator projects contain stale `ITEM_NAME` compatibility hints. Enable the

@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "Mine-imator Suite + Import for Blender",
     "author": "Mine-imator MCprep Bridge contributors",
-    "version": (0, 3, 5),
+    "version": (0, 3, 6),
     "blender": (5, 2, 0),
     "location": "File > Import; 3D View > Sidebar > MI Bridge",
     "description": "Import Mine-imator scenes, assets, and environments for Blender and MCprep",
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, FloatVectorProperty, PointerProperty, StringProperty
-from bpy.types import Operator, Panel, PropertyGroup
+from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
 from bpy_extras.io_utils import ImportHelper
 
 from . import core, render_export, suite_environment
@@ -62,6 +62,32 @@ def _suite_toggle_update(self, _context) -> None:
         self.import_environment = True
 
 
+def _outer_layers_import_update(_self, context) -> None:
+    if context and context.scene:
+        context.scene["mi_bridge_defaults_initialized"] = True
+
+
+def _bridge_preferences(context: bpy.types.Context) -> "MIBRIDGE_AddonPreferences | None":
+    addon = context.preferences.addons.get(__package__) if context else None
+    return addon.preferences if addon else None
+
+
+def _initialize_scene_defaults(context: bpy.types.Context) -> None:
+    scene = context.scene
+    if scene.get("mi_bridge_defaults_initialized") or not hasattr(scene, "mi_bridge"):
+        return
+    preferences = _bridge_preferences(context)
+    if preferences:
+        scene.mi_bridge.outer_layers_3d = preferences.outer_layers_3d_default
+    scene["mi_bridge_defaults_initialized"] = True
+
+
+def _outer_layers_default_update(self, context) -> None:
+    if context and context.scene and hasattr(context.scene, "mi_bridge"):
+        context.scene.mi_bridge.outer_layers_3d = self.outer_layers_3d_default
+        context.scene["mi_bridge_defaults_initialized"] = True
+
+
 COLOR_DEFAULTS = {
     "sky_color": (0.471, 0.655, 1.0, 1.0),
     "sky_clouds_color": (1.0, 1.0, 1.0, 1.0),
@@ -73,6 +99,22 @@ COLOR_DEFAULTS = {
     "water_color": (0.243, 0.459, 0.882, 1.0),
     "fog_color": (0.471, 0.655, 1.0, 1.0),
 }
+
+
+class MIBRIDGE_AddonPreferences(AddonPreferences):
+    bl_idname = __package__
+
+    outer_layers_3d_default: BoolProperty(
+        name="Default 3D outer layers",
+        description="Choose whether 3D player outer layers start enabled for new scenes and imports",
+        default=False,
+        update=_outer_layers_default_update,
+    )
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.label(text="Mine-imator import defaults")
+        layout.prop(self, "outer_layers_3d_default", icon="MOD_SOLIDIFY")
 
 
 class MIBRIDGE_PG_environment(PropertyGroup):
@@ -185,6 +227,7 @@ class MIBRIDGE_PG_settings(PropertyGroup):
         name="3D character outer layers",
         description="On the next import, turn player-skin hat, jacket, sleeve, and pants pixels into one-texel-deep 3D geometry",
         default=False,
+        update=_outer_layers_import_update,
     )
     import_items: BoolProperty(name="Items", default=True)
     import_blocks: BoolProperty(name="Blocks and special blocks", default=True)
@@ -260,6 +303,7 @@ class MIBRIDGE_OT_preflight(Operator):
     bl_description = "Validate the project, assets, and optional tools without modifying the scene"
 
     def execute(self, context):
+        _initialize_scene_defaults(context)
         settings = context.scene.mi_bridge
         try:
             report = preflight(bpy.path.abspath(settings.project_path), _options(settings))
@@ -321,6 +365,7 @@ class MIBRIDGE_OT_import_file(Operator, ImportHelper):
     )
 
     def invoke(self, context, event):
+        _initialize_scene_defaults(context)
         self.outer_layers_3d = context.scene.mi_bridge.outer_layers_3d
         return super().invoke(context, event)
 
@@ -363,6 +408,7 @@ class MIBRIDGE_OT_apply_environment(Operator):
 
 
 def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings, context: bpy.types.Context) -> None:
+    _initialize_scene_defaults(context)
     layout.prop(settings, "project_path")
     suite = layout.box()
     suite.prop(settings, "mineimator_suite", icon="WORLD")
@@ -386,6 +432,9 @@ def _draw_settings(layout: bpy.types.UILayout, settings: MIBRIDGE_PG_settings, c
     outer = categories.row()
     outer.enabled = settings.import_characters
     outer.prop(settings, "outer_layers_3d", icon="MOD_SOLIDIFY")
+    preferences = _bridge_preferences(context)
+    if preferences:
+        categories.prop(preferences, "outer_layers_3d_default", icon="PREFERENCES")
     if settings.outer_layers_3d:
         latest_name = str(context.scene.get("mi_bridge_last_import_collection", ""))
         latest = bpy.data.collections.get(latest_name)
@@ -599,6 +648,7 @@ def _menu_import(self, _context):
 
 
 CLASSES = (
+    MIBRIDGE_AddonPreferences,
     MIBRIDGE_PG_environment,
     MIBRIDGE_PG_settings,
     MIBRIDGE_OT_preflight,
